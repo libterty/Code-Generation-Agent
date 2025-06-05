@@ -1,0 +1,86 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model RequirementTask {
+  id                 String            @id @default(dbgenerated("uuid_generate_v1mc()")) @db.Uuid
+  project_id         String
+  repository_url     String
+  branch             String
+  requirement_text   String
+  priority           TaskPriority      @default(medium)
+  additional_context Json?
+  language           CodeLanguage      @default(typescript)
+  output_path        String?
+  status             RequirementStatus @default(pending)
+  progress           Float             @default(0.0)
+  details            Json?
+  created_at         DateTime          @default(now())
+  updated_at         DateTime          @default(now()) @updatedAt
+
+  // Relations
+  metrics QualityMetric[]
+
+  @@map(name: "requirement_tasks")
+}
+
+model CodeTemplate {
+  id               String   @id @default(dbgenerated("uuid_generate_v1mc()"))
+  name             String
+  language         String
+  template_content String
+  metadata         Json?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @default(now()) @updatedAt
+
+  @@map(name: "code_templates")
+}
+
+model QualityMetric {
+  id                         String   @id @default(dbgenerated("uuid_generate_v1mc()"))
+  task_id                    String   @db.Uuid
+  code_quality_score         Float    @default(0.0)
+  requirement_coverage_score Float    @default(0.0)
+  syntax_validity_score      Float    @default(0.0)
+  static_analysis_results    Json?
+  feedback                   String?
+  created_at                 DateTime @default(now())
+
+  task RequirementTask @relation(fields: [task_id], references: [id])
+
+  @@map(name: "quality_metrics")
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  critical
+}
+
+enum CodeLanguage {
+  typescript
+  javascript
+  python
+  java
+  csharp
+  go
+  ruby
+  php
+}
+
+enum RequirementStatus {
+  pending
+  in_progress
+  completed
+  failed
+}

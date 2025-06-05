@@ -1,0 +1,36 @@
+version: "3"
+
+services:
+  db:
+    container_name: postgres
+    restart: always
+    image: postgres:14.10-alpine
+    environment:
+      POSTGRES_PASSWORD: admin
+    ports:
+      - '5435:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data/
+
+  pgadmin:
+    container_name: pgadmin
+    image: dpage/pgadmin4
+    restart: always
+    links:
+      - db
+    depends_on:
+      - db
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_LISTEN_PORT: 5050
+    volumes:
+      - pgadmin:/root/.pgadmin
+      - pgadmin:/var/lib/pgadmin
+    ports:
+      - '5055:5050'
+
+
+volumes:
+    pgdata:
+    pgadmin:
