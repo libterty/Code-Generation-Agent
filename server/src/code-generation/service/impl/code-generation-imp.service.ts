@@ -10,20 +10,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import simpleGit from 'simple-git';
-import { llMConfig } from '@server/config/llm.config';
+import { LLMService } from '@server/core/llm/service/llm.service';
 import { RequirementQueueService } from '@server/requirement-task/service/requirement-queue.service';
 import { RequirementTaskService } from '@server/requirement-task/service/requirement-task.service';
-import { PRISMA_REPOSITORY, REDIS_REPOSITORY, REQUIREMENT_TASK_SERVICE, REQUIREMENT_QUEUE_SERVICE } from '@server/constants';
+import { RequestLLMDto } from '@server/core/llm/dto/llm.dto';
+import { PRISMA_REPOSITORY, REDIS_REPOSITORY, REQUIREMENT_TASK_SERVICE, REQUIREMENT_QUEUE_SERVICE, LLM_SERVICE } from '@server/constants';
+import { LLMProvider } from '@server/config/llm.config';
 
 @Injectable()
 export class CodeGenerationServiceImpl implements OnModuleInit {
   private readonly logger = new Logger(CodeGenerationServiceImpl.name);
+  private readonly systemMessage = 'You are a helpful assistant specialized in software development.';
 
   constructor(
     private readonly httpService: HttpService,
-    
-    @Inject(llMConfig.KEY)
-    private config: ConfigType<typeof llMConfig>,
     
     @Inject(PRISMA_REPOSITORY)
     private prismaRepository: PrismaClient,
@@ -36,6 +36,9 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
     @Inject(REQUIREMENT_QUEUE_SERVICE)
     private readonly requirementQueueService: RequirementQueueService,
+
+    @Inject(LLM_SERVICE)
+    private readonly llmService: LLMService,
   ) {}
 
   /**
@@ -159,7 +162,11 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
       6. Suggested file structure for implementation
     `;
 
-    const result = await this.callLlmApi(prompt);
+    const result = await this.callLlmApi({
+      prompt,
+      systemMessage: this.systemMessage,
+      options: {}
+    });
 
     // Parse the LLM response into a structured format
     const analysis = {
@@ -210,7 +217,11 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
       Format the response as a JSON object where keys are file paths and values are the file content.
     `;
 
-    const result = await this.callLlmApi(prompt);
+    const result = await this.callLlmApi({
+      prompt,
+      systemMessage: this.systemMessage,
+      options: {}
+    });
 
     // Extract the code from the LLM response
     try {
@@ -327,33 +338,176 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
    * @param prompt The prompt to send to the LLM
    * @private
    */
-  private async callLlmApi(prompt: string): Promise<string> {
+  private async callLlmApi(dto: RequestLLMDto): Promise<string> {
     try {
-      const response = await lastValueFrom(
-        this.httpService.post(
-          this.config.llmApiUrl,
-          {
-            model: this.config.llmApiModel,
-            messages: [
-              { role: 'system', content: 'You are a helpful assistant specialized in software development.' },
-              { role: 'user', content: prompt }
-            ],
-            temperature: 0.2,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${this.config.llmApiKey}`,
-            },
-          }
-        ),
-      );
-
-      return response.data.choices[0].message.content;
+      dto.options.temperature = dto.options?.temperature ?? 0.2;
+      
+      if (dto.options?.useFallback !== false) {
+        // 使用 fallback 機制（會自動嘗試 Ollama 原生 API）
+        const result = await this.llmService.callLLMApiWithFallback(dto);
+        
+        this.logger.log(`LLM call successful using provider: ${result.provider}`);
+        return result.content;
+      } else {
+        // 使用指定提供商（現在支援 Ollama 原生 API）
+        return await this.llmService.callLLMApi(dto);
+      }
     } catch (error) {
       this.logger.error(`Error calling LLM API: ${error.message}`);
       throw new Error(`Failed to call LLM API: ${error.message}`);
     }
+  }
+
+  private async generateCodeWithOllama(requirementAnalysis: Record<string, any>, language: CodeLanguage): Promise<Record<string, string>> {
+    const languageContext = this.getLanguageContext(language);
+
+    const prompt = `
+      Generate code in ${language.toLowerCase()} based on the following analyzed requirement:
+      
+      Title: ${requirementAnalysis.title}
+      Functionality: ${requirementAnalysis.functionality}
+      Components needed: ${this.formatList(requirementAnalysis.components)}
+      
+      ${languageContext}
+      
+      Provide complete code with proper documentation.
+      Format the response as a JSON object where keys are file paths and values are the file content.
+    `;
+
+    // 明確指定使用 Ollama 的 DeepSeek Coder（原生 API）
+    const result = await this.callLlmApi({
+      prompt,
+      systemMessage: this.systemMessage,
+      options: {
+        provider: LLMProvider.OLLAMA,
+        temperature: 0.2,
+        useFallback: false
+      }
+    });
+
+    try {
+      return JSON.parse(result);
+    } catch (error) {
+      return this.extractJsonFromText(result);
+    }
+  }
+
+  private async analyzeRequirementWithOllama(requirementText: string, language: CodeLanguage): Promise<Record<string, any>> {
+    const prompt = `
+      Analyze the following software requirement and break it down into structured components.
+      The code will be implemented in ${language.toLowerCase()}.
+      
+      Requirement: ${requirementText}
+      
+      Please provide:
+      1. A clear title for this requirement
+      2. The main functionality being requested
+      3. Key components or modules needed
+      4. Expected inputs and outputs
+      5. Any dependencies or constraints mentioned
+      6. Suggested file structure for implementation
+    `;
+
+    // 使用 Ollama 的 DeepSeek Chat 進行需求分析（原生 API）
+    const result = await this.callLlmApi({
+      prompt,
+      systemMessage: this.systemMessage,
+      options: {
+        provider: LLMProvider.OLLAMA_DEEPSEEK_CHAT,
+        temperature: 0.1,
+        useFallback: false
+      }
+    });
+
+    return this.parseAnalysisResult(result);
+  }
+
+  // 新增：使用您截圖中的 kevin 模型
+  private async generateWithKevinModel(prompt: string): Promise<string> {
+    return this.callLlmApi(({
+      prompt,
+      systemMessage: this.systemMessage,
+      options: {
+        provider: LLMProvider.OLLAMA_KEVIN,
+        temperature: 0.2,
+        useFallback: false
+      }
+    }));
+  }
+
+  // 檢查 Ollama 可用性
+  async checkOllamaAvailability(): Promise<{ available: boolean; models: string[] }> {
+    const availableProviders = this.llmService.getAvailableProviders();
+    const ollamaProviders = Object.keys(availableProviders).filter(name => name.startsWith('ollama-'));
+    
+    return {
+      available: ollamaProviders.length > 0,
+      models: ollamaProviders.map(name => name.replace('ollama-', ''))
+    };
+  }
+
+  // 使用多個 Ollama 模型進行對比
+  async generateCodeWithMultipleOllamaModels(
+    requirementAnalysis: Record<string, any>, 
+    language: CodeLanguage
+  ): Promise<Record<string, Record<string, string>>> {
+    // 修正：確保這些模型在您的環境中可用
+    const ollamaModels = [LLMProvider.OLLAMA_KEVIN, LLMProvider.OLLAMA_DEEPSEEK_CODER, LLMProvider.OLLAMA_LLAMA3_1, LLMProvider.OLLAMA_QWEN2_5];
+    const results: Record<string, Record<string, string>> = {};
+
+    const prompt = `Generate ${language} code for: ${requirementAnalysis.title}`;
+
+    for (const model of ollamaModels) {
+      try {
+        this.logger.debug(`Trying to generate code with ${model}`);
+        const result = await this.callLlmApi({
+          prompt,
+          systemMessage: this.systemMessage,
+          options: {
+            provider: model,
+            useFallback: false
+          }
+        });
+        results[model] = this.extractJsonFromText(result);
+        this.logger.log(`Successfully generated code with ${model}`);
+      } catch (error) {
+        this.logger.warn(`${model} failed: ${error.message}`);
+        results[model] = {};
+      }
+    }
+
+    return results;
+  }
+
+  // 新增：測試特定模型是否可用
+  async testSpecificOllamaModel(modelName: string): Promise<boolean> {
+    try {
+      const result = await this.callLlmApi({
+        prompt: 'Hello, please respond with "OK" to confirm you are working.',
+        systemMessage: this.systemMessage,
+        options: {
+          provider: `ollama-${modelName}` as LLMProvider,
+          useFallback: false
+        }
+      });
+      return result.toLowerCase().includes('ok');
+    } catch (error) {
+      this.logger.warn(`Model ollama-${modelName} is not available: ${error.message}`);
+      return false;
+    }
+  }
+
+  // 新增：解析分析結果的輔助方法
+  private parseAnalysisResult(result: string): Record<string, any> {
+    // 這裡實現解析 LLM 回應的邏輯
+    return {
+      title: this.extractTitle(result),
+      functionality: this.extractSection(result, 'main functionality'),
+      components: this.extractComponents(result),
+      inputsOutputs: this.extractSection(result, 'inputs and outputs'),
+      dependencies: this.extractSection(result, 'dependencies or constraints'),
+      fileStructure: this.extractFileStructure(result)
+    };
   }
 
   /**
