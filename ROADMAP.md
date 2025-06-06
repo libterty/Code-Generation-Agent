@@ -1,97 +1,99 @@
-# Multi-Agent MCP Server 部署策略
+# Multi-Agent MCP Server Deployment Strategy
 
-## 系統架構概覽
+## System Architecture Overview
 
 ### Core Components
 
-### 階段一：需求理解 + 程式碼生成 + 自動提交
+### Phase 1: Requirement Understanding + Code Generation + Auto Commit
 
-#### Code Generation Agent 設計
+#### Code Generation Agent Design
 
-**核心功能：**
-- 需求解析與理解（NLP + 結構化分析）
-- 程式碼生成（支援多語言）
-- Git 自動化操作（commit & push）
+**Core Functions:**
+- Requirement parsing and understanding (NLP + structured analysis)
+- Code generation (multi-language support)
+- Automated Git operations (commit & push)
 
-**技術組件：**
-- 需求解析模組：使用 LLM 解析自然語言需求
-- 程式碼生成模組：基於 template + 動態生成
-- Git 整合模組：自動化 git 操作
-- 品質檢查模組：基本語法與格式檢查
+**Technical Components:**
+- Requirement Parsing Module: Uses LLM to analyze natural language requirements
+- Code Generation Module: Template-based + dynamic generation
+- Git Integration Module: Automated git operations
+- Quality Check Module: Basic syntax and formatting checks
 
-**部署考量：**
+**Deployment Considerations:**
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ MCP Server Gateway │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ Agent Orchestrator (任務分發與協調) │
-├──────────────────────────────┬──────────────────────────────────┬──────────────────────────────────────────────────┤
-│ Code Agent │ Review Agent │ Infra Agent │
-│ (階段一) │ (階段二) │ (階段三) │
-└──────────────────────────────┴──────────────────────────────────┴──────────────────────────────────────────────────┘
-│ │ │
-▼ ▼ ▼
-┌──────────────────────────────┬──────────────────────────────────┬──────────────────────────────────────────────────┐
-│ Code │ Reivew │ Infrastructure │
-│ Integration │ Integration │ Participating │
-└──────────────────────────────┴──────────────────────────────────┴──────────────────────────────────────────────────┘
+```
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                         MCP Server Gateway                                                                │
+├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                        Agent Orchestrator (Task Distribution & Coordination)                                              │
+├───────────────────────────────┬───────────────────────────────┬───────────────────────────────┐
+│         Code Agent            │         Review Agent          │         Infra Agent           │
+│          (Phase 1)            │          (Phase 2)            │          (Phase 3)            │
+└───────────────────────────────┴───────────────────────────────┴───────────────────────────────┘
+            │                               │                               │
+            ▼                               ▼                               ▼
+┌───────────────────────────────┬───────────────────────────────┬───────────────────────────────┐
+│           Code                │           Review              │        Infrastructure         │
+│        Integration            │        Integration            │         Integration           │
+└───────────────────────────────┴───────────────────────────────┴───────────────────────────────┘
+```
 ```
 
-## 階段二：程式碼審查 + 除錯協助
+## Phase 2: Code Review + Debug Assistance
 
-### Review & Debug Agent 設計
+### Review & Debug Agent Design
 
-**核心功能：**
-- 依照團隊Code style的靜態程式碼分析
-- 程式碼品質評估
-- Bug 識別與修復建議
-- 依照團隊Code style的 PR 審查
+**Core Functions:**
+- Static code analysis based on team code style
+- Code quality evaluation
+- Bug identification and fix suggestions
+- PR review based on team code style
 
-**技術組件：**
-- 靜態分析引擎：SonarQube/ESLint/Pylint 整合
-- AI Review 模組：程式碼模式識別 (接近團隊Code style)
-- Debug 助手：錯誤診斷，解決方案推薦，實現Hotfix程式碼產生
-- CI/CD 整合：自動觸發 review 流程 (接近團隊Code style)
+**Technical Components:**
+- Static Analysis Engine: SonarQube/ESLint/Pylint integration
+- AI Review Module: Code pattern recognition (aligned with team code style)
+- Debug Assistant: Error diagnosis, solution recommendations, hotfix code generation
+- CI/CD Integration: Auto-triggered review process (aligned with team code style)
 
-## 階段三：生產環境監控
+## Phase 3: Production Monitoring
 
-### Production Monitor Agent 設計
+### Production Monitor Agent Design
 
-**核心功能：**
-- 應用效能監控
-- 錯誤日誌分析
-- 自動化告警與回應
-- 容量規劃建議
-- 拉取雲端IAC架構並視覺化呈現
-- 雲端IAC架構分析和維護
+**Core Functions:**
+- Application performance monitoring
+- Error log analysis
+- Automated alerting and response
+- Capacity planning recommendations
+- Fetch and visualize cloud IAC architecture
+- Cloud IAC analysis and maintenance
 
-**技術組件：**
-- 監控數據收集：Prometheus/Grafana 整合
-- 日誌分析：ELK Stack 或雲端 logging
-- 智能告警：異常檢測與預測
-- 自動修復：基礎問題自動處理
-- IAC：拉取IAC並視覺化呈現，分析IAC，維護IAC
+**Technical Components:**
+- Monitoring Data Collection: Prometheus/Grafana integration
+- Log Analysis: ELK Stack or cloud logging
+- Intelligent Alerting: Anomaly detection and prediction
+- Auto-healing: Automated handling of basic issues
+- IAC: Fetch, visualize, analyze, and maintain IAC
 
 ```yaml
 Code Gen Agent:
-- Runtime: Python/Node.js 容器
-- LLM Backend: 本地部署或 API 調用
+- Runtime: Python/Node.js containers
+- LLM Backend: Local deployment or API call
 - Git Integration: GitLab/GitHub API
-- Storage: Redis (session) + PostgreSQL (需求歷史)
-- Security: SSH keys 管理，權限控制
+- Storage: Redis (session) + PostgreSQL (requirement history)
+- Security: SSH key management, access control
 ```
 
-## Multi-Agent 協調機制
+## Multi-Agent Coordination Mechanism
 
 ### Agent Orchestrator
 
-**通訊協議：**
-- 內部通訊：gRPC 或 Message Queue (RabbitMQ/Redis)
-- 外部介面：REST API + WebSocket (即時通知)
-- 資料同步：Event-driven architecture
+**Communication Protocols:**
+- Internal: gRPC or Message Queue (RabbitMQ/Redis)
+- External: REST API + WebSocket (real-time notifications)
+- Data Sync: Event-driven architecture
 
-## 部署架構建議
+## Deployment Architecture Recommendations
 
 ### Infrastructure Setup
 
@@ -108,25 +110,25 @@ class AgentOrchestrator:
 
 ## Security Considerations
 
-- **API 認證：** JWT + API Keys
-- **Git 權限：** 最小權限原則，分離式 SSH keys
-- **網路安全：** VPC + Security Groups
-- **資料加密：** 傳輸與儲存加密
-- **審計日誌：** 完整操作記錄
+- **API Authentication:** JWT + API Keys
+- **Git Permissions:** Principle of least privilege, separate SSH keys
+- **Network Security:** VPC + Security Groups
+- **Data Encryption:** Encryption in transit and at rest
+- **Audit Logs:** Complete operation records
 
-## 階段性實施計畫
+## Phased Implementation Plan
 
-### Phase 1 (MVP - 1-2個月)
-- 建立基礎 MCP server 框架
-- 實作 Code Generation Agent
-- Git 整合與自動提交功能
-- 基礎 Web UI 介面
+### Phase 1 (MVP - 1-2 months)
+- Build basic MCP server framework
+- Implement Code Generation Agent
+- Git integration and auto-commit functionality
+- Basic Web UI
 
-### Phase 2 (增強版 - 2-3個月)
-- Review Agent 開發
-- CI/CD pipeline 整合
-- 程式碼品質檢查自動化
-- 團隊協作功能
+### Phase 2 (Enhanced - 2-3 months)
+- Develop Review Agent
+- Integrate CI/CD pipeline
+- Automate code quality checks
+- Team collaboration features
 
 ```yaml
 Production Environment:
@@ -136,64 +138,76 @@ Load Balancer:
 Application Layer:
 - Kubernetes cluster (3+ nodes)
 - Docker containers per agent
-- Auto-scaling 配置
+- Auto-scaling configuration
 Data Layer:
-- PostgreSQL (主資料庫)
-- Redis (快取 + session)
-- MongoDB (日誌與監控數據)
+- PostgreSQL (main database)
+- Redis (cache + session)
+- MongoDB (logs & monitoring data)
 Monitoring:
 - Prometheus + Grafana
 - ELK Stack
 - Health checks
 ```
 
-### Phase 3 (完整版 - 3-4個月)
-- Monitor Agent 實作
-- 生產環境整合
-- 智能告警系統
-- 效能優化與擴展
+### Phase 3 (Full Version - 3-4 months)
+- Implement Monitor Agent
+- Production environment integration
+- Intelligent alerting system
+- Performance optimization and scaling
 
-## 技術棧建議
+## Technology Stack Recommendations
 
 ### Backend
-- **語言：** Python (FastAPI) 或 Node.js (Express)
-- **AI/ML：** Transformers, LangChain
-- **資料庫：** PostgreSQL + Redis + MongoDB
-- **訊息佇列：** RabbitMQ 或 Apache Kafka
+- **Language:** Python (FastAPI) or Node.js (Express)
+- **AI/ML:** Transformers, LangChain
+- **Database:** PostgreSQL + Redis + MongoDB
+- **Message Queue:** RabbitMQ or Apache Kafka
 
-### Frontend (管理介面)
-- **框架：** React/Vue.js
-- **UI 庫：** Ant Design 或 Material-UI
-- **狀態管理：** Redux/Vuex
+### Frontend (Admin Interface)
+- **Framework:** React/Vue.js
+- **UI Library:** Ant Design or Material-UI
+- **State Management:** Redux/Vuex
 
 ### DevOps
-- **容器化：** Docker + Kubernetes
-- **CI/CD：** GitLab CI 或 GitHub Actions
-- **監控：** Prometheus + Grafana + OpenTelemetry
-- **日誌：** ELK Stack
+- **Containerization:** Docker + Kubernetes
+- **CI/CD:** GitLab CI or GitHub Actions
+- **Monitoring:** Prometheus + Grafana + OpenTelemetry
+- **Logging:** ELK Stack
 
-## 風險評估與建議
+## Risk Assessment & Recommendations
 
-### 技術風險
-- **LLM 準確性：** 建立 fallback 機制與人工確認流程
-- **Git 操作安全：** 實作 rollback 機制與權限控制
-- **系統穩定性：** 充分的測試與監控
+### Technical Risks
+- **LLM Accuracy:** Establish fallback mechanisms and manual verification
+- **Git Operation Security:** Implement rollback and access control
+- **System Stability:** Comprehensive testing and monitoring
 
-### 營運風險
-- **資源消耗：** 合理的 rate limiting 與資源配額
-- **成本控制：** LLM API 使用監控與預算警告
-- **團隊採用：** 漸進式導入與訓練計畫
+### Operational Risks
+- **Resource Consumption:** Reasonable rate limiting and resource quotas
+- **Cost Control:** LLM API usage monitoring and budget alerts
+- **Team Adoption:** Gradual rollout and training programs
 
-## 成功指標
+## Success Metrics
 
-### 量化指標
-- 程式碼生成準確率 > 85%
-- 自動 commit 成功率 > 95%
-- Code review 覆蓋率 > 90%
-- 系統可用性 > 99.5%
+### Quantitative Metrics
+- Code generation accuracy > 85%
+- Auto commit success rate > 95%
+- Code review coverage > 90%
+- System availability > 99.5%
 
-### 質化指標
-- Junior 開發者工作效率提升
-- 程式碼品質改善
-- 生產環境穩定性增加
-- 團隊滿意度調查結果
+### Qualitative Metrics
+- Improved productivity for junior developers
+- Enhanced code quality
+- Increased production environment stability
+- Positive team satisfaction survey results
+
+---
+
+**Review Notes:**
+- The structure is clear and phases are well defined.
+- Technical stack and deployment details are comprehensive.
+- Consider adding more details on fallback/manual review for LLM outputs.
+- Security and risk sections are well covered.
+- Success metrics are measurable and actionable.
+- Minor typo: "Reivew" in the diagram should be "Review".
+- Suggest clarifying the "Participating" label in the architecture diagram for better understanding.
+- Overall, the roadmap is actionable and aligns with best practices for multi-agent system deployment.

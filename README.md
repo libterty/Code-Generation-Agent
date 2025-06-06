@@ -1,53 +1,53 @@
 # Code Generation Agent
 
-## 專案概述
+## Project Overview
 
-Code Generation Agent 是一個基於 NestJS 框架開發的智能程式碼生成系統，能夠接收自然語言需求，透過 NLP 與結構化分析將其轉換為程式碼，並自動進行 Git 操作。
+Code Generation Agent is an intelligent code generation system developed based on the NestJS framework. It can receive natural language requirements, convert them into code through NLP and structured analysis, and automatically perform Git operations.
 
-本專案實現了階段一的核心功能：
-1. 需求解析與理解（NLP + 結構化分析）
-2. 程式碼生成（支援多語言）
-3. Git 自動化操作（commit & push）
+This project implements the core features of phase one:
+1. Requirement parsing and understanding (NLP + structured analysis)
+2. Code generation (supports multiple languages)
+3. Git automation (commit & push)
 
-## 系統架構
+## System Architecture
 
-專案採用模組化設計，主要包含以下核心模組：
+The project adopts a modular design and mainly includes the following core modules:
 
-1. **需求解析與理解模組**：負責接收自然語言需求，使用 LLM 進行解析，並轉換為結構化資料。
-2. **程式碼生成模組**：基於需求分析結果，使用模板與動態生成方式產生多語言程式碼。
-3. **Git 自動化操作模組**：處理程式碼的 Git 操作，包括 commit 與 push。
+1. **Requirement Analysis Module**: Responsible for receiving natural language requirements, using LLM for parsing, and converting them into structured data.
+2. **Code Generation Module**: Based on the analysis results, generates multi-language code using templates and dynamic generation.
+3. **Git Automation Module**: Handles Git operations for code, including commit and push.
 
-## 技術堆疊
+## Tech Stack
 
-- **後端框架**：NestJS
-- **語言**：TypeScript
-- **LLM 整合**：OpenAI API
-- **Git 整合**：本地 Git 操作 + GitHub API
-- **資料儲存**：預留 PostgreSQL 與 Redis 整合介面
+- **Backend Framework**: NestJS
+- **Language**: TypeScript
+- **LLM Integration**: OpenAI API
+- **Git Integration**: Local Git operations + GitHub API
+- **Data Storage**: Reserved interfaces for PostgreSQL and Redis integration
 
-## 安裝與設定
+## Installation & Setup
 
-### 前置需求
+### Prerequisites
 
 - Node.js (v16+)
-- npm 或 yarn
+- npm or yarn
 - Git
 
-### 安裝步驟
+### Installation Steps
 
-1. 克隆專案：
+1. Clone the project:
 ```bash
 git clone <repository-url>
 cd code-generation-agent
 ```
 
-2. 安裝依賴：
+2. Install dependencies:
 ```bash
 npm install
 ```
 
-3. 環境變數設定：
-創建 `.env` 檔案並設定以下變數：
+3. Set environment variables:
+Create a `.env` file and set the following variables:
 ```
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_MODEL=gpt-4
@@ -56,47 +56,47 @@ GITHUB_USERNAME=your_github_username
 GITHUB_EMAIL=your_github_email
 ```
 
-4. 啟動應用：
+4. Start the application:
 ```bash
 npm run start:dev
 ```
 
-## API 使用說明
+## API Usage
 
-### 1. 需求分析 API
+### 1. Requirement Analysis API
 
-**端點**：`POST /requirement-analysis/analyze`
+**Endpoint**: `POST /requirement-analysis/analyze`
 
-**請求格式**：
+**Request Format**:
 ```json
 {
-  "requirement": "開發一個用戶管理系統，包含用戶註冊、登入、個人資料管理功能"
+  "requirement": "Develop a user management system with user registration, login, and profile management features"
 }
 ```
 
-**回應格式**：
+**Response Format**:
 ```json
 {
   "features": [
     {
-      "name": "用戶註冊",
-      "description": "允許新用戶創建帳號",
+      "name": "User Registration",
+      "description": "Allows new users to create accounts",
       "priority": "high"
     },
     {
-      "name": "用戶登入",
-      "description": "驗證用戶身份",
+      "name": "User Login",
+      "description": "Authenticate user identity",
       "priority": "high"
     },
     {
-      "name": "個人資料管理",
-      "description": "允許用戶查看和更新個人資料",
+      "name": "Profile Management",
+      "description": "Allows users to view and update their profiles",
       "priority": "medium"
     }
   ],
   "entities": [
     {
-      "name": "用戶",
+      "name": "User",
       "attributes": ["id", "username", "email", "password", "profile"],
       "relationships": []
     }
@@ -104,7 +104,7 @@ npm run start:dev
   "constraints": [
     {
       "type": "security",
-      "description": "密碼需要加密儲存"
+      "description": "Passwords must be stored encrypted"
     }
   ],
   "technicalStack": {
@@ -116,23 +116,23 @@ npm run start:dev
 }
 ```
 
-### 2. 程式碼生成 API
+### 2. Code Generation API
 
-**端點**：`POST /code-generation/generate`
+**Endpoint**: `POST /code-generation/generate`
 
-**請求格式**：
+**Request Format**:
 ```json
 {
   "projectName": "user-management-system",
   "analysisResult": {
-    // 需求分析結果（從上一步獲取）
+    // Requirement analysis result (from previous step)
   },
   "languages": ["typescript"],
   "outputDir": "/path/to/output"
 }
 ```
 
-**回應格式**：
+**Response Format**:
 ```json
 [
   {
@@ -153,11 +153,11 @@ npm run start:dev
 ]
 ```
 
-### 3. Git 操作 API
+### 3. Git Operation API
 
-**端點**：`POST /git-integration/commit-and-push`
+**Endpoint**: `POST /git-integration/commit-and-push`
 
-**請求格式**：
+**Request Format**:
 ```json
 {
   "message": "Add user management features",
@@ -170,100 +170,101 @@ npm run start:dev
 }
 ```
 
-**回應格式**：
+**Response Format**:
 ```json
 {
   "commitHash": "abc123def456..."
 }
 ```
 
-### 4. 完整流程 API
+### 4. Full Process API
 
-**端點**：`POST /process-requirement`
+**Endpoint**: `POST /process-requirement`
 
-**請求格式**：
+**Request Format**:
 ```json
 {
-  "requirement": "開發一個用戶管理系統，包含用戶註冊、登入、個人資料管理功能",
+  "requirement": "Develop a user management system with user registration, login, and profile management features",
   "projectName": "user-management-system",
   "languages": ["typescript"],
   "commitMessage": "Initial commit: User management system"
 }
 ```
 
-**回應格式**：
+**Response Format**:
 ```json
 {
   "analysisResult": {
-    // 需求分析結果
+    // Requirement analysis result
   },
   "generatedCode": [
-    // 生成的程式碼
+    // Generated code
   ],
   "success": true
 }
 ```
 
-## 擴展指南
+## Extension Guide
 
-### 新增程式語言支援
+### Add Support for New Programming Languages
 
-1. 在 `src/modules/code-generation/generators/` 目錄下創建新的生成器類別，實現 `ICodeGenerator` 介面。
-2. 在 `src/modules/code-generation/templates/` 目錄下創建相應的模板類別。
-3. 在 `CodeGenerationModule` 中註冊新的生成器。
+1. Create a new generator class in the `src/modules/code-generation/generators/` directory implementing the `ICodeGenerator` interface.
+2. Create corresponding template classes in the `src/modules/code-generation/templates/` directory.
+3. Register the new generator in the `CodeGenerationModule`.
 
-### 整合其他 Git 提供者
+### Integrate Other Git Providers
 
-1. 在 `src/modules/git-integration/providers/` 目錄下創建新的提供者類別，實現 `IGitProvider` 介面。
-2. 在 `GitIntegrationModule` 中註冊新的提供者。
+1. Create a new provider class in the `src/modules/git-integration/providers/` directory implementing the `IGitProvider` interface.
+2. Register the new provider in the `GitIntegrationModule`.
 
-## 測試
+## Testing
 
-執行單元測試：
+Run unit tests:
 ```bash
 npm run test
 ```
 
-執行端對端測試：
+Run end-to-end tests:
 ```bash
 npm run test:e2e
 ```
 
-## 專案結構
+## Project Structure
 
 ```
 code-generation-agent/
 ├── src/
-│   ├── main.ts                        # 應用程式入口點
-│   ├── app.module.ts                  # 根模組
-│   ├── app.controller.ts              # 根控制器
-│   ├── app.service.ts                 # 根服務
+│   ├── main.ts                        # Application entry point
+│   ├── app.module.ts                  # Root module
+│   ├── app.controller.ts              # Root controller
+│   ├── app.service.ts                 # Root service
 │   ├── modules/
-│   │   ├── requirement-analysis/      # 需求解析與理解模組
-│   │   ├── requirement-analysis/      # 需求排程
-│   │   ├── code-generation/           # 程式碼生成模組
-│   │   └── git-integration/           # Git 自動化操作模組
-│   │   └── quality-check/             # 程式碼品質保證模組
-├── test/                              # 測試目錄
-├── nest-cli.json                      # NestJS CLI 配置
-├── package.json                       # 專案依賴
-└── README.md                          # 專案說明
+│   │   ├── requirement-analysis/      # Requirement analysis module
+│   │   ├── requirement-analysis/      # Requirement scheduling
+│   │   ├── code-generation/           # Code generation module
+│   │   └── git-integration/           # Git automation module
+│   │   └── quality-check/             # Code quality assurance module
+├── test/                              # Test directory
+├── nest-cli.json                      # NestJS CLI config
+├── package.json                       # Project dependencies
+└── README.md                          # Project documentation
 ```
 
-## 未來擴展
+## Future Extensions
 
-1. **資料庫整合**：實現 PostgreSQL 連接，持久化需求與生成歷史。
-2. **快取機制**：整合 Redis 用於會話管理和臨時資料儲存。
-3. **更多語言支援**：擴展程式碼生成器，支援更多程式語言。
-4. **CI/CD 整合**：自動化測試與部署流程。
-5. **使用者介面**：開發前端介面，提供更友善的操作體驗。
+1. **Database Integration**: Implement PostgreSQL connection for persisting requirements and generation history.
+2. **Caching Mechanism**: Integrate Redis for session management and temporary data storage.
+3. **More Language Support**: Extend code generators to support more programming languages.
+4. **CI/CD Integration**: Automate testing and deployment processes.
+5. **User Interface**: Develop a frontend interface for a more user-friendly experience.
 
-## 故障排除
+## Troubleshooting
 
-1. **LLM API 錯誤**：確認 OPENAI_API_KEY 環境變數已正確設定。
-2. **Git 操作失敗**：確認本地 Git 已正確配置，且有適當的權限。
-3. **GitHub API 錯誤**：確認 GITHUB_TOKEN 有效且具有足夠的權限。
+1. **LLM API Errors**: Ensure the OPENAI_API_KEY environment variable is set correctly.
+2. **Git Operation Failures**: Ensure local Git is properly configured and has the necessary permissions.
+3. **GitHub API Errors**: Ensure GITHUB_TOKEN is valid and has sufficient permissions.
 
-## 授權
+## License
 
-本專案採用 MIT 授權 - 詳見 LICENSE 檔案
+This project is licensed under the MIT License - see the LICENSE file for details.
+
