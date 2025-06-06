@@ -4,15 +4,18 @@ import { Injectable, Logger, Inject } from '@nestjs/common';
 import { PrismaClient, RequirementStatus } from '.prisma/client';
 import { RequirementTaskService } from '@server/requirement-task/service/requirement-task.service';
 import { RequirementQueueService } from '@server/requirement-task/service/requirement-queue.service';
-import { 
-  RequirementRequestDto, 
-  RequirementResponseDto, 
+import {
+  RequirementRequestDto,
+  RequirementResponseDto,
   QueryRequirementTaskDto,
   UpdateTaskStatusDto,
   UpdateTaskQualityMetricsDto,
-  TaskStatusDto,  
+  TaskStatusDto,
 } from '@server/requirement-task/dto/requirement-task.dto';
-import { PRISMA_REPOSITORY, REQUIREMENT_QUEUE_SERVICE } from '@server/constants';
+import {
+  PRISMA_REPOSITORY,
+  REQUIREMENT_QUEUE_SERVICE,
+} from '@server/constants';
 
 @Injectable()
 export class RequirementTaskServiceImpl implements RequirementTaskService {
@@ -27,7 +30,7 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
   ) {
     // Register the task processor with the queue service
     this.requirementQueueService.registerTaskProcessor(
-      this.processRequirementTask.bind(this)
+      this.processRequirementTask.bind(this),
     );
   }
 
@@ -36,9 +39,13 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
    * @param requirement The requirement details
    * @returns Task ID and status
    */
-  public async createRequirementTask(requirement: RequirementRequestDto): Promise<RequirementResponseDto> {
-    this.logger.log(`Creating new requirement task for project ${requirement.projectId}`);
-    
+  public async createRequirementTask(
+    requirement: RequirementRequestDto,
+  ): Promise<RequirementResponseDto> {
+    this.logger.log(
+      `Creating new requirement task for project ${requirement.projectId}`,
+    );
+
     return this.prismaRepository.$transaction(async (tx) => {
       // Create a new task record in the database
       const task = await tx.requirementTask.create({
@@ -78,10 +85,10 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
     const task = await this.prismaRepository.requirementTask.findUnique({
       where: { id: taskId },
       include: {
-        metrics: true // 包含關聯的品質指標
+        metrics: true, // 包含關聯的品質指標
       },
     });
-    
+
     if (!task) {
       throw new Error(`Task with ID ${taskId} not found`);
     }
@@ -94,20 +101,22 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
       taskId: task.id,
       status: task.status,
       progress: task.progress,
-      details: typeof task.details === 'string' ? JSON.parse(task.details) : task.details as Record<string, any>,
+      details:
+        typeof task.details === 'string'
+          ? JSON.parse(task.details)
+          : (task.details as Record<string, any>),
       createdAt: task.created_at.toISOString(),
       updatedAt: task.updated_at.toISOString(),
       queueInfo: {
         state: queueInfo.state,
-        progress: queueInfo.progress
+        progress: queueInfo.progress,
       },
-      qualityMetrics: task.metrics.map(m => ({
+      qualityMetrics: task.metrics.map((m) => ({
         codeQualityScore: m.code_quality_score,
         requirementCoverageScore: m.requirement_coverage_score,
         syntaxValidityScore: m.syntax_validity_score,
       })),
     };
-
 
     return response;
   }
@@ -118,7 +127,9 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
    * @param status Optional status filter
    * @returns Array of tasks
    */
-  public async listTasks(dto: QueryRequirementTaskDto): Promise<TaskStatusDto[]> { 
+  public async listTasks(
+    dto: QueryRequirementTaskDto,
+  ): Promise<TaskStatusDto[]> {
     // 取得任務列表，同時包含品質指標
     const tasks = await this.prismaRepository.requirementTask.findMany({
       where: {
@@ -127,14 +138,16 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
       },
       orderBy: { created_at: 'desc' },
       include: {
-        metrics: true
-      }
+        metrics: true,
+      },
     });
-    
+
     // 轉換為 DTO 格式
     return Promise.all(
       tasks.map(async (task) => {
-        const queueInfo = await this.requirementQueueService.getJobStatus(task.id);
+        const queueInfo = await this.requirementQueueService.getJobStatus(
+          task.id,
+        );
         const taskDto: TaskStatusDto = {
           taskId: task.id,
           status: task.status,
@@ -144,9 +157,9 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
           updatedAt: task.updated_at.toISOString(),
           queueInfo: {
             state: queueInfo.state,
-            progress: queueInfo.progress
+            progress: queueInfo.progress,
           },
-          qualityMetrics: task.metrics.map(m => ({
+          qualityMetrics: task.metrics.map((m) => ({
             codeQualityScore: m.code_quality_score,
             requirementCoverageScore: m.requirement_coverage_score,
             syntaxValidityScore: m.syntax_validity_score,
@@ -176,8 +189,10 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
         updated_at: new Date(),
       },
     });
-    
-    this.logger.log(`Updated task ${taskId} status to ${status} with progress ${progress}`);
+
+    this.logger.log(
+      `Updated task ${taskId} status to ${status} with progress ${progress}`,
+    );
   }
 
   /**
@@ -189,19 +204,21 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
    * @param staticAnalysisResults Static analysis results
    * @param feedback Feedback text
    */
-  public async updateTaskQualityMetrics(dto: UpdateTaskQualityMetricsDto): Promise<void> {
-    const { 
-      taskId, 
-      codeQualityScore, 
-      requirementCoverageScore, 
-      syntaxValidityScore, 
-      staticAnalysisResults, 
-      feedback 
+  public async updateTaskQualityMetrics(
+    dto: UpdateTaskQualityMetricsDto,
+  ): Promise<void> {
+    const {
+      taskId,
+      codeQualityScore,
+      requirementCoverageScore,
+      syntaxValidityScore,
+      staticAnalysisResults,
+      feedback,
     } = dto;
 
     // 檢查是否已存在品質指標
     const existingMetric = await this.prismaRepository.qualityMetric.findFirst({
-      where: { task_id: taskId }
+      where: { task_id: taskId },
     });
 
     if (existingMetric) {
@@ -213,8 +230,8 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
           requirement_coverage_score: requirementCoverageScore,
           syntax_validity_score: syntaxValidityScore,
           static_analysis_results: staticAnalysisResults,
-          feedback
-        }
+          feedback,
+        },
       });
     } else {
       // 創建新的品質指標
@@ -225,11 +242,11 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
           requirement_coverage_score: requirementCoverageScore,
           syntax_validity_score: syntaxValidityScore,
           static_analysis_results: staticAnalysisResults,
-          feedback
-        }
+          feedback,
+        },
       });
     }
-    
+
     this.logger.log(`Updated quality metrics for task ${taskId}`);
   }
 
@@ -242,15 +259,15 @@ export class RequirementTaskServiceImpl implements RequirementTaskService {
     // This method is registered with the queue service and will be called
     // when a task is ready to be processed. This is where you would integrate
     // with the CodeGenerationService to handle the actual processing.
-    
+
     this.logger.log(`Received task ${taskId} for processing from queue`);
-    
+
     // For now, we'll just update the status to show it's been received
     await this.updateTaskStatus({
       taskId,
       status: RequirementStatus.in_progress,
       progress: 0.1,
-      details: { message: 'Task received from queue and is being processed' }
+      details: { message: 'Task received from queue and is being processed' },
     });
     // The actual processing will be handled by the CodeGenerationService
     // which will be injected into that service

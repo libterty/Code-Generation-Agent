@@ -3,8 +3,15 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigType } from '@nestjs/config';
 import { lastValueFrom } from 'rxjs';
 import { LLMService } from '@server/core/llm/service/llm.service';
-import { RequestLLMDto, RequestProviderLLMDto } from '@server/core/llm/dto/llm.dto';
-import { dynamicLlmConfig, SingleLLMConfig, LLMProvider } from '@server/config/llm.config';
+import {
+  RequestLLMDto,
+  RequestProviderLLMDto,
+} from '@server/core/llm/dto/llm.dto';
+import {
+  dynamicLlmConfig,
+  SingleLLMConfig,
+  LLMProvider,
+} from '@server/config/llm.config';
 
 @Injectable()
 export class LLmServiceImpl implements LLMService {
@@ -21,28 +28,29 @@ export class LLmServiceImpl implements LLMService {
     const { prompt, systemMessage, options } = dto;
     const providerName = options?.provider || this.llmConfig.defaultProvider;
     const provider = this.getProvider(providerName);
-    
+
     if (!provider) {
       throw new Error(`LLM provider '${provider.apiType}' not available`);
     }
 
     return this.callProviderApi({
-      provider: provider.apiType,
+      provider: provider.apiType, // default LLMProvider.OPENAI
       prompt,
       systemMessage,
-      options
+      options,
     });
   }
 
-  public async callLLMApiWithFallback(dto: RequestLLMDto): Promise<{ content: string; provider: LLMProvider }> {
+  public async callLLMApiWithFallback(
+    dto: RequestLLMDto,
+  ): Promise<{ content: string; provider: LLMProvider }> {
     const { prompt, systemMessage, options } = dto;
     const providerConfigs = this.getProvidersInFallbackOrder();
     const excludeProviders = options?.excludeProviders || [];
-    
+
     let lastError: Error | null = null;
 
     for (const providerConfig of providerConfigs) {
-      
       if (excludeProviders.includes(providerConfig.apiType)) {
         continue;
       }
@@ -55,17 +63,23 @@ export class LLmServiceImpl implements LLMService {
           systemMessage,
           options,
         });
-        
-        this.logger.log(`Successfully called provider: ${providerConfig.apiType}`);
+
+        this.logger.log(
+          `Successfully called provider: ${providerConfig.apiType}`,
+        );
         return { content, provider: providerConfig.apiType };
       } catch (error) {
-        this.logger.warn(`Provider ${providerConfig.apiType} failed: ${error.message}`);
+        this.logger.warn(
+          `Provider ${providerConfig.apiType} failed: ${error.message}`,
+        );
         lastError = error as Error;
         continue;
       }
     }
 
-    throw new Error(`All LLM providers failed. Last error: ${lastError?.message}`);
+    throw new Error(
+      `All LLM providers failed. Last error: ${lastError?.message}`,
+    );
   }
 
   private async callProviderApi(dto: RequestProviderLLMDto): Promise<string> {
@@ -74,14 +88,29 @@ export class LLmServiceImpl implements LLMService {
       // Select different call methods based on API type
       switch (provider) {
         case LLMProvider.ANTHROPIC:
-          return this.callAnthropicApi(provider, prompt, systemMessage, options);
+          return this.callAnthropicApi(
+            provider,
+            prompt,
+            systemMessage,
+            options,
+          );
         case LLMProvider.GOOGLE:
           return this.callGoogleApi(provider, prompt, systemMessage, options);
         case LLMProvider.OLLAMA:
-          return this.callOllamaNativeApi(provider, prompt, systemMessage, options);
+          return this.callOllamaNativeApi(
+            provider,
+            prompt,
+            systemMessage,
+            options,
+          );
         default:
           // OpenAI compatible API
-          return this.callOpenAICompatibleApi(provider, prompt, systemMessage, options);
+          return this.callOpenAICompatibleApi(
+            provider,
+            prompt,
+            systemMessage,
+            options,
+          );
       }
     } catch (error) {
       this.logger.error(`Error calling ${provider} API: ${error.message}`);
@@ -97,7 +126,7 @@ export class LLmServiceImpl implements LLMService {
     provider: LLMProvider,
     prompt: string,
     systemMessage?: string,
-    options?: { temperature?: number; maxTokens?: number }
+    options?: { temperature?: number; maxTokens?: number },
   ): Promise<string> {
     // Build the complete prompt
     let fullPrompt = prompt;
@@ -112,10 +141,12 @@ export class LLmServiceImpl implements LLMService {
       options: {
         temperature: options?.temperature ?? 0.2,
         num_predict: options?.maxTokens ?? -1, // -1 means no limit
-      }
+      },
     };
 
-    this.logger.debug(`Calling Ollama native API with model: ${providerConfig.model}`);
+    this.logger.debug(
+      `Calling Ollama native API with model: ${providerConfig.model}`,
+    );
 
     const response = await lastValueFrom(
       this.httpService.post(
@@ -125,8 +156,8 @@ export class LLmServiceImpl implements LLMService {
           headers: {
             'Content-Type': 'application/json',
           },
-        }
-      )
+        },
+      ),
     );
 
     return response.data.response;
@@ -140,19 +171,20 @@ export class LLmServiceImpl implements LLMService {
     provider: LLMProvider,
     prompt: string,
     systemMessage?: string,
-    options?: { temperature?: number; maxTokens?: number }
+    options?: { temperature?: number; maxTokens?: number },
   ): Promise<string> {
     const messages = [];
-    
+
     if (systemMessage) {
       messages.push({ role: 'system', content: systemMessage });
     } else {
-      messages.push({ 
-        role: 'system', 
-        content: 'You are a helpful assistant specialized in software development.' 
+      messages.push({
+        role: 'system',
+        content:
+          'You are a helpful assistant specialized in software development.',
       });
     }
-    
+
     messages.push({ role: 'user', content: prompt });
     const providerConfig = this.getProvider(provider);
     const requestBody: any = {
@@ -177,8 +209,8 @@ export class LLmServiceImpl implements LLMService {
       this.httpService.post(
         `${providerConfig.apiUrl}/chat/completions`,
         requestBody,
-        { headers }
-      )
+        { headers },
+      ),
     );
 
     return response.data.choices[0].message.content;
@@ -189,7 +221,7 @@ export class LLmServiceImpl implements LLMService {
     provider: LLMProvider,
     prompt: string,
     systemMessage?: string,
-    options?: { temperature?: number; maxTokens?: number }
+    options?: { temperature?: number; maxTokens?: number },
   ): Promise<string> {
     const providerConfig = this.getProvider(provider);
     const requestBody: any = {
@@ -213,8 +245,8 @@ export class LLmServiceImpl implements LLMService {
             'x-api-key': providerConfig.apiKey,
             'anthropic-version': '2023-06-01',
           },
-        }
-      )
+        },
+      ),
     );
 
     return response.data.content[0].text;
@@ -224,18 +256,20 @@ export class LLmServiceImpl implements LLMService {
     provider: LLMProvider,
     prompt: string,
     systemMessage?: string,
-    options?: { temperature?: number; maxTokens?: number }
+    options?: { temperature?: number; maxTokens?: number },
   ): Promise<string> {
     const fullPrompt = systemMessage ? `${systemMessage}\n\n${prompt}` : prompt;
 
     const requestBody = {
-      contents: [{
-        parts: [{ text: fullPrompt }]
-      }],
+      contents: [
+        {
+          parts: [{ text: fullPrompt }],
+        },
+      ],
       generationConfig: {
         temperature: options?.temperature ?? 0.2,
         maxOutputTokens: options?.maxTokens ?? 4096,
-      }
+      },
     };
     const providerConfig = this.getProvider(provider);
     const response = await lastValueFrom(
@@ -246,8 +280,8 @@ export class LLmServiceImpl implements LLMService {
           headers: {
             'Content-Type': 'application/json',
           },
-        }
-      )
+        },
+      ),
     );
 
     return response.data.candidates[0].content.parts[0].text;
@@ -255,13 +289,13 @@ export class LLmServiceImpl implements LLMService {
 
   public getAvailableProviders(): Record<string, SingleLLMConfig> {
     const availableProviders: Record<string, SingleLLMConfig> = {};
-    
+
     Object.entries(this.llmConfig.providers).forEach(([name, config]) => {
       if (config.enabled !== false) {
         availableProviders[name] = config;
       }
     });
-    
+
     return availableProviders;
   }
 
@@ -275,20 +309,23 @@ export class LLmServiceImpl implements LLMService {
 
   private getProvidersInFallbackOrder(): SingleLLMConfig[] {
     const providers: SingleLLMConfig[] = [];
-    
-    this.llmConfig.fallbackOrder.forEach(providerName => {
+
+    this.llmConfig.fallbackOrder.forEach((providerName) => {
       const provider = this.getProvider(providerName);
       if (provider) {
         providers.push(provider);
       }
     });
-    
+
     Object.entries(this.llmConfig.providers).forEach(([name, config]) => {
-      if (config.enabled !== false && !this.llmConfig.fallbackOrder.includes(name as LLMProvider)) {
+      if (
+        config.enabled !== false &&
+        !this.llmConfig.fallbackOrder.includes(name as LLMProvider)
+      ) {
         providers.push(config);
       }
     });
-    
+
     return providers;
   }
 }

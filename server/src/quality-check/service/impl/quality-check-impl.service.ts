@@ -1,4 +1,3 @@
-
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import * as path from 'path';
 import { PrismaClient, QualityMetric, CodeLanguage } from '.prisma/client';
@@ -7,7 +6,6 @@ import { QualityCheckService } from '@server/quality-check/service/quality-check
 import { LLMIntegrationService } from '@server/core/llm/service/llm-integration.service';
 import { PRISMA_REPOSITORY, LLM_INTEGRATION_SERVICE } from '@server/constants';
 
-
 @Injectable()
 export class QualityCheckServiceImpl implements QualityCheckService {
   private readonly logger = new Logger(QualityCheckServiceImpl.name);
@@ -15,7 +13,7 @@ export class QualityCheckServiceImpl implements QualityCheckService {
   constructor(
     @Inject(PRISMA_REPOSITORY)
     private prismaRepository: PrismaClient,
-    
+
     @Inject(LLM_INTEGRATION_SERVICE)
     private readonly llmIntegrationService: LLMIntegrationService,
   ) {}
@@ -32,37 +30,43 @@ export class QualityCheckServiceImpl implements QualityCheckService {
     generatedCode: Record<string, string>,
     requirementAnalysis: Record<string, any>,
     language: CodeLanguage,
-    taskId: string
-  ): Promise<{ 
-    passed: boolean; 
+    taskId: string,
+  ): Promise<{
+    passed: boolean;
     codeQualityScore: number;
     requirementCoverageScore: number;
     syntaxValidityScore: number;
     feedback: string;
   }> {
     this.logger.log(`Checking code quality for task ${taskId}`);
-    
+
     // 1. 進行基本語法檢查
-    const syntaxValidityScore = await this.validateSyntax(generatedCode, language);
-    
+    const syntaxValidityScore = await this.validateSyntax(
+      generatedCode,
+      language,
+    );
+
     // 2. 要求 LLM 評估代碼質量
-    const evaluation = await this.evaluateCodeQuality(generatedCode, requirementAnalysis, language);
-    
+    const evaluation = await this.evaluateCodeQuality(
+      generatedCode,
+      requirementAnalysis,
+      language,
+    );
+
     // 3. 計算需求覆蓋率
     const requirementCoverageScore = await this.calculateRequirementCoverage(
-      generatedCode, 
-      requirementAnalysis
+      generatedCode,
+      requirementAnalysis,
     );
-    
+
     // 4. 確定整體品質分數是否通過閾值
-    const overallScore = (
-      evaluation.codeQualityScore * 0.5 + 
-      requirementCoverageScore * 0.3 + 
-      syntaxValidityScore * 0.2
-    );
-    
+    const overallScore =
+      evaluation.codeQualityScore * 0.5 +
+      requirementCoverageScore * 0.3 +
+      syntaxValidityScore * 0.2;
+
     const passed = overallScore >= 85; // 85% 閾值
-    
+
     // 5. 儲存品質指標
     await this.saveQualityMetrics(
       taskId,
@@ -70,15 +74,15 @@ export class QualityCheckServiceImpl implements QualityCheckService {
       requirementCoverageScore,
       syntaxValidityScore,
       evaluation.staticAnalysisResults,
-      evaluation.feedback
+      evaluation.feedback,
     );
-    
+
     return {
       passed,
       codeQualityScore: evaluation.codeQualityScore,
       requirementCoverageScore,
       syntaxValidityScore,
-      feedback: evaluation.feedback
+      feedback: evaluation.feedback,
     };
   }
 
@@ -89,15 +93,15 @@ export class QualityCheckServiceImpl implements QualityCheckService {
    * @private
    */
   private async validateSyntax(
-    generatedCode: Record<string, string>, 
-    language: string
+    generatedCode: Record<string, string>,
+    language: string,
   ): Promise<number> {
     // 這裡可以整合具體的語法檢查工具，如 ESLint/TSLint/Pylint 等
     // 本示例中，我們使用 LLM 進行基本語法檢查
-    
+
     const fileEntries = Object.entries(generatedCode);
     let validCount = 0;
-    
+
     for (const [filePath, content] of fileEntries) {
       // 檢查檔案是否為有效的程式碼檔案
       if (this.isCodeFile(filePath, language)) {
@@ -107,7 +111,7 @@ export class QualityCheckServiceImpl implements QualityCheckService {
         }
       }
     }
-    
+
     // 計算語法有效性分數 (0-100)
     return fileEntries.length > 0 ? (validCount / fileEntries.length) * 100 : 0;
   }
@@ -127,9 +131,9 @@ export class QualityCheckServiceImpl implements QualityCheckService {
       go: ['.go'],
       rust: ['.rs'],
       'c++': ['.cpp', '.hpp', '.h'],
-      'c#': ['.cs']
+      'c#': ['.cs'],
     };
-    
+
     const ext = path.extname(filePath).toLowerCase();
     return extensions[language]?.includes(ext) || false;
   }
@@ -140,7 +144,10 @@ export class QualityCheckServiceImpl implements QualityCheckService {
    * @param language 程式語言
    * @private
    */
-  private async validateFileContent(content: string, language: string): Promise<boolean> {
+  private async validateFileContent(
+    content: string,
+    language: string,
+  ): Promise<boolean> {
     try {
       // 此處可整合語法檢查工具
       // 目前透過 LLM 進行基本檢查
@@ -155,14 +162,14 @@ export class QualityCheckServiceImpl implements QualityCheckService {
         
         只回答 "valid" 或 "invalid"，後面附上發現的主要語法錯誤（如果有）。
       `;
-      
+
       const result = await this.llmIntegrationService.callLLmApi({
         prompt,
         options: {
           provider: LLMProvider.OLLAMA_DEEPSEEK_CHAT,
           temperature: 0.2,
-          useFallback: true
-        }
+          useFallback: true,
+        },
       });
       return result.toLowerCase().trim().startsWith('valid');
     } catch (error) {
@@ -181,7 +188,7 @@ export class QualityCheckServiceImpl implements QualityCheckService {
   private async evaluateCodeQuality(
     generatedCode: Record<string, string>,
     requirementAnalysis: Record<string, any>,
-    language: string
+    language: string,
   ): Promise<{
     codeQualityScore: number;
     staticAnalysisResults: Record<string, any>;
@@ -189,10 +196,15 @@ export class QualityCheckServiceImpl implements QualityCheckService {
   }> {
     // 準備程式碼樣本用於評估
     const codeSnippets = Object.entries(generatedCode)
-      .map(([path, content]) => `File: ${path}\n\n${content.substring(0, 1000)}${content.length > 1000 ? '...' : ''}`)
+      .map(
+        ([path, content]) =>
+          `File: ${path}\n\n${content.substring(0, 1000)}${
+            content.length > 1000 ? '...' : ''
+          }`,
+      )
       .join('\n\n========\n\n')
       .substring(0, 8000); // 限制提示大小
-    
+
     const prompt = `
       作為專業的程式碼審查員，請評估以下程式碼是否符合需求，並評估其品質。
       
@@ -223,29 +235,29 @@ export class QualityCheckServiceImpl implements QualityCheckService {
         "issues": ["問題1", "問題2", ...]
       }
     `;
-    
+
     try {
       const result = await this.llmIntegrationService.callLLmApi({
         prompt,
         options: {
           provider: LLMProvider.OLLAMA_DEEPSEEK_CHAT,
           temperature: 0.2,
-          useFallback: true
-        }
+          useFallback: true,
+        },
       });
       const evaluation = JSON.parse(result);
-      
+
       return {
         codeQualityScore: evaluation.totalScore,
         staticAnalysisResults: evaluation.scores,
-        feedback: evaluation.feedback
+        feedback: evaluation.feedback,
       };
     } catch (error) {
       this.logger.error(`Error evaluating code quality: ${error.message}`);
       return {
         codeQualityScore: 0,
         staticAnalysisResults: {},
-        feedback: `評估失敗: ${error.message}`
+        feedback: `評估失敗: ${error.message}`,
       };
     }
   }
@@ -258,34 +270,40 @@ export class QualityCheckServiceImpl implements QualityCheckService {
    */
   private async calculateRequirementCoverage(
     generatedCode: Record<string, string>,
-    requirementAnalysis: Record<string, any>
+    requirementAnalysis: Record<string, any>,
   ): Promise<number> {
     // 提取需求中的關鍵元素
     const requiredComponents = requirementAnalysis.components || [];
     const functionality = requirementAnalysis.functionality || '';
     const fileStructure = requirementAnalysis.fileStructure || [];
-    
+
     // 準備程式碼內容
     const allCode = Object.values(generatedCode).join('\n');
-    
+
     // 檢查文件結構覆蓋率
     let fileStructureCoverage = 0;
     if (fileStructure.length > 0) {
-      const generatedFiles = Object.keys(generatedCode).map(f => path.basename(f));
+      const generatedFiles = Object.keys(generatedCode).map((f) =>
+        path.basename(f),
+      );
       let matchCount = 0;
-      
+
       for (const requiredFile of fileStructure) {
         const basename = path.basename(requiredFile);
-        if (generatedFiles.some(f => f === basename || f.includes(basename.replace(/\.\w+$/, '')))) {
+        if (
+          generatedFiles.some(
+            (f) => f === basename || f.includes(basename.replace(/\.\w+$/, '')),
+          )
+        ) {
           matchCount++;
         }
       }
-      
+
       fileStructureCoverage = matchCount / fileStructure.length;
     } else {
       fileStructureCoverage = 1; // 如果沒有指定文件結構，則視為全部覆蓋
     }
-    
+
     // 使用 LLM 評估功能覆蓋率
     const prompt = `
       評估生成的程式碼是否覆蓋了需求中的所有關鍵功能和組件。
@@ -306,22 +324,24 @@ export class QualityCheckServiceImpl implements QualityCheckService {
         "reason": "理由"
       }
     `;
-    
+
     try {
       const result = await this.llmIntegrationService.callLLmApi({
         prompt,
         options: {
           provider: LLMProvider.OLLAMA_DEEPSEEK_CHAT,
           temperature: 0.2,
-          useFallback: true
-        }
+          useFallback: true,
+        },
       });
       const evaluation = JSON.parse(result);
-      
+
       // 綜合文件結構覆蓋率和功能覆蓋率
       return (fileStructureCoverage * 30 + evaluation.coverageScore * 70) / 100;
     } catch (error) {
-      this.logger.error(`Error calculating requirement coverage: ${error.message}`);
+      this.logger.error(
+        `Error calculating requirement coverage: ${error.message}`,
+      );
       return fileStructureCoverage * 100; // 如果 LLM 評估失敗，則僅使用文件結構覆蓋率
     }
   }
@@ -342,7 +362,7 @@ export class QualityCheckServiceImpl implements QualityCheckService {
     requirementCoverageScore: number,
     syntaxValidityScore: number,
     staticAnalysisResults: Record<string, any>,
-    feedback: string
+    feedback: string,
   ): Promise<QualityMetric> {
     const metrics = await this.prismaRepository.qualityMetric.create({
       data: {
@@ -351,8 +371,8 @@ export class QualityCheckServiceImpl implements QualityCheckService {
         requirement_coverage_score: requirementCoverageScore,
         syntax_validity_score: syntaxValidityScore,
         static_analysis_results: JSON.stringify(staticAnalysisResults),
-        feedback
-      }
+        feedback,
+      },
     });
 
     return metrics;

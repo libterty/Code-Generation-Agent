@@ -1,14 +1,16 @@
-import { 
-  RequirementRequestDto, 
-  RequirementResponseDto, 
+import {
+  RequirementRequestDto,
+  RequirementResponseDto,
   QueryRequirementTaskDto,
   UpdateTaskStatusDto,
   UpdateTaskQualityMetricsDto,
-  TaskStatusDto,  
+  TaskStatusDto,
 } from '@server/requirement-task/dto/requirement-task.dto';
 
 export interface RequirementTaskService {
-  createRequirementTask(requirement: RequirementRequestDto): Promise<RequirementResponseDto>;
+  createRequirementTask(
+    requirement: RequirementRequestDto,
+  ): Promise<RequirementResponseDto>;
   getTaskStatus(taskId: string): Promise<TaskStatusDto>;
   listTasks(dto: QueryRequirementTaskDto): Promise<TaskStatusDto[]>;
   updateTaskStatus(dto: UpdateTaskStatusDto): Promise<void>;

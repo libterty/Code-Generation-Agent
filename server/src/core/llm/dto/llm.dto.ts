@@ -1,4 +1,3 @@
-
 import { CodeLanguage } from '.prisma/client';
 import { LLMProvider } from '@server/config/llm.config';
 
@@ -45,5 +44,5 @@ export class OllamaAvailabilityResponseDto {
 
 export class OllamaModelTestDto {
   systemMessage: string;
-  modelName: string;
+  modelName: LLMProvider;
 }

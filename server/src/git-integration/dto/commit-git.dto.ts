@@ -1,9 +1,11 @@
+import { RequirementTask } from '.prisma/client';
+import { ResponseQualityCheckDto } from '@server/quality-check/dto/quality-check.dto';
+
 export class RequestCommitGitDto {
-  repositoryUrl: string;
-  branch: string;
+  task: RequirementTask;
+  qualityResult: ResponseQualityCheckDto;
   generatedCode: Record<string, string>;
   outputPath: string;
-  requirementText: string;
   requirementAnalysis: Record<string, any>;
 }
 

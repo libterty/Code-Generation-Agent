@@ -3,7 +3,6 @@ export { Cluster, RedisOptions } from 'ioredis';
 import { RedisRepository } from '@server/core/redis-client/redis.repository';
 import { REDIS_REPOSITORY } from '@server/constants';
 
-
 @Module({
   providers: [
     {

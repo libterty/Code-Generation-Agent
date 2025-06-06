@@ -1,4 +1,4 @@
-import { AnalyzeRequirementDto } from "../dto/analyze-requirement.dto";
+import { AnalyzeRequirementDto } from '../dto/analyze-requirement.dto';
 
 export enum FeaturePriority {
   LOW = 'low',
@@ -46,5 +46,7 @@ export interface AnalysisResult {
 }
 
 export interface RequirementAnalysisService {
-  analyzeRequirement(requirement: AnalyzeRequirementDto): Promise<Record<string, any>>;
+  analyzeRequirement(
+    requirement: AnalyzeRequirementDto,
+  ): Promise<Record<string, any>>;
 }

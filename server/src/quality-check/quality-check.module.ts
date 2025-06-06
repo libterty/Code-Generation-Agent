@@ -12,10 +12,7 @@ const providers = [
 ];
 
 @Module({
-  imports: [
-    PrismaModule,
-    LLMModule,
-  ],
+  imports: [PrismaModule, LLMModule],
   providers,
   exports: providers,
 })

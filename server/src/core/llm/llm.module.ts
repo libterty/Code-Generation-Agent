@@ -16,9 +16,7 @@ const providers = [
 ];
 
 @Module({
-  imports: [
-    HttpModule,
-  ],
+  imports: [HttpModule],
   providers,
   exports: providers,
 })

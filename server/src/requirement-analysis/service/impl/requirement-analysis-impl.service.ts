@@ -9,7 +9,9 @@ import { AnalyzeRequirementDto } from '@server/requirement-analysis/dto/analyze-
 import { PRISMA_REPOSITORY } from '@server/constants';
 
 @Injectable()
-export class RequirementAnalysisServiceImpl implements RequirementAnalysisService {
+export class RequirementAnalysisServiceImpl
+  implements RequirementAnalysisService
+{
   private readonly logger = new Logger(RequirementAnalysisServiceImpl.name);
 
   constructor(
@@ -17,7 +19,7 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
 
     @Inject(llMConfig.KEY)
     private config: ConfigType<typeof llMConfig>,
-    
+
     @Inject(PRISMA_REPOSITORY)
     private prismaRepository: PrismaClient,
   ) {}
@@ -29,10 +31,16 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
    * @param templateId 可選的模板ID
    * @returns 結構化的需求分析
    */
-  public async analyzeRequirement(requirement: AnalyzeRequirementDto): Promise<Record<string, any>> {
+  public async analyzeRequirement(
+    requirement: AnalyzeRequirementDto,
+  ): Promise<Record<string, any>> {
     const { requirementText, language, templateId } = requirement;
-    this.logger.log(`Analyzing requirement for ${language}${templateId ? ' with template' : ''}`);
-    
+    this.logger.log(
+      `Analyzing requirement for ${language}${
+        templateId ? ' with template' : ''
+      }`,
+    );
+
     // 獲取語言特定的模板內容（如果有）
     let templateContent = '';
     if (templateId) {
@@ -46,7 +54,7 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
         templateContent = template.template_content;
       }
     }
-    
+
     const prompt = `
       分析以下軟體需求並將其分解為結構化組件。
       代碼將使用 ${language} 實現。
@@ -84,7 +92,9 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
       return JSON.parse(result);
     } catch (error) {
       // 備用方案：從文本響應中提取JSON
-      this.logger.warn(`Failed to parse LLM response as JSON, attempting to extract JSON`);
+      this.logger.warn(
+        `Failed to parse LLM response as JSON, attempting to extract JSON`,
+      );
       return this.extractJsonFromText(result);
     }
   }
@@ -98,15 +108,17 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
     // 嘗試在文本中找到JSON塊
     const jsonBlockRegex = /```(?:json)?\s*({[\s\S]*?})\s*```|({[\s\S]*?})/;
     const match = text.match(jsonBlockRegex);
-    
+
     if (match && (match[1] || match[2])) {
       try {
         return JSON.parse(match[1] || match[2]);
       } catch (error) {
-        this.logger.error(`Failed to parse extracted JSON block: ${error.message}`);
+        this.logger.error(
+          `Failed to parse extracted JSON block: ${error.message}`,
+        );
       }
     }
-    
+
     // 使用結構化方式從文本中提取信息
     const result: Record<string, any> = {
       title: this.extractSection(text, 'title'),
@@ -115,9 +127,12 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
       inputsOutputs: this.extractSection(text, 'inputs and outputs'),
       dependencies: this.extractSection(text, 'dependencies or constraints'),
       fileStructure: this.extractFileStructure(text),
-      implementationStrategy: this.extractSection(text, 'implementation strategy'),
+      implementationStrategy: this.extractSection(
+        text,
+        'implementation strategy',
+      ),
     };
-    
+
     return result;
   }
 
@@ -128,7 +143,10 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
    * @private
    */
   private extractSection(text: string, section: string): string {
-    const sectionRegex = new RegExp(`(?:${section}|\\d+\\.\\s*(?:[\\w\\s]+${section}[\\w\\s]+)):?\\s*([\\s\\S]*?)(?:\\n\\s*\\d+\\.|\\n\\s*(?:[A-Z]|\\w+:)|$)`, 'i');
+    const sectionRegex = new RegExp(
+      `(?:${section}|\\d+\\.\\s*(?:[\\w\\s]+${section}[\\w\\s]+)):?\\s*([\\s\\S]*?)(?:\\n\\s*\\d+\\.|\\n\\s*(?:[A-Z]|\\w+:)|$)`,
+      'i',
+    );
     const match = text.match(sectionRegex);
     return match ? match[1].trim() : '';
   }
@@ -141,15 +159,17 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
   private extractComponents(text: string): string[] {
     // 嘗試找到組件部分
     const componentsSection = this.extractSection(text, 'components|modules');
-    
+
     if (!componentsSection) {
       return [];
     }
-    
+
     // 按項目符號或編號項目拆分
-    const componentLines = componentsSection.split(/\n\s*[-*•]|\n\s*\d+\.\s+/).filter(Boolean);
-    
-    return componentLines.map(line => line.trim());
+    const componentLines = componentsSection
+      .split(/\n\s*[-*•]|\n\s*\d+\.\s+/)
+      .filter(Boolean);
+
+    return componentLines.map((line) => line.trim());
   }
 
   /**
@@ -159,15 +179,17 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
    */
   private extractFileStructure(text: string): string[] {
     const fileStructureSection = this.extractSection(text, 'file structure');
-    
+
     if (!fileStructureSection) {
       return [];
     }
-    
+
     // 按項目符號、編號項目或文件路徑拆分
-    const fileLines = fileStructureSection.split(/\n\s*[-*•]|\n\s*\d+\.\s+|\n\s*(?:\/|\\)/).filter(Boolean);
-    
-    return fileLines.map(line => {
+    const fileLines = fileStructureSection
+      .split(/\n\s*[-*•]|\n\s*\d+\.\s+|\n\s*(?:\/|\\)/)
+      .filter(Boolean);
+
+    return fileLines.map((line) => {
       // 清理文件路徑
       const cleaned = line.trim().replace(/^(?:\/|\\|-\s*|•\s*|\d+\.\s*)/, '');
       return cleaned;
@@ -187,17 +209,21 @@ export class RequirementAnalysisServiceImpl implements RequirementAnalysisServic
           {
             model: this.config.llmApiModel,
             messages: [
-              { role: 'system', content: '你是一個專門用於軟體開發的助手，專長於理解和解析軟體需求。你需要將自然語言需求分解為結構化的組件，以便於後續的代碼生成。' },
-              { role: 'user', content: prompt }
+              {
+                role: 'system',
+                content:
+                  '你是一個專門用於軟體開發的助手，專長於理解和解析軟體需求。你需要將自然語言需求分解為結構化的組件，以便於後續的代碼生成。',
+              },
+              { role: 'user', content: prompt },
             ],
             temperature: 0.2,
           },
           {
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${this.config.llmApiKey}`,
+              Authorization: `Bearer ${this.config.llmApiKey}`,
             },
-          }
+          },
         ),
       );
 

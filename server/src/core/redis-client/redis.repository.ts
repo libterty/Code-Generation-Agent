@@ -8,7 +8,6 @@ import { ConfigType } from '@nestjs/config';
 import { redisConfig } from '@server/config/redis.config';
 import { Cluster } from 'ioredis';
 
-
 @Injectable()
 export class RedisRepository extends Cluster implements OnApplicationBootstrap {
   private readonly logger = new Logger(RedisRepository.name);

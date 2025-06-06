@@ -1,31 +1,29 @@
-import { CodeLanguage, RequirementTask } from '.prisma/client';
+import { CodeLanguage } from '.prisma/client';
 import { EventBase } from '@server/core/event/base.event';
-import { EventType } from '@server/core/event/event';
-import { LLMProvider } from '@server/config/llm.config';
+import { EventType } from '../../core/event/event';
+import { RequestCommitGitDto } from '@server/git-integration/dto/commit-git.dto';
 
-export type CodeGeneratedEventType = {
-  modelToUse: LLMProvider;
-  task: RequirementTask;
-  generatedCode: Record<string, string>;
-  requirementAnalysis: Record<string, any>;
-};
-export class CodeGeneratedEvent extends EventBase<CodeGeneratedEventType> {
-  public readonly eventName = EventType.CODE_GENERATION;
+export class CodeCommitdEvent extends EventBase<RequestCommitGitDto> {
+  public readonly eventName = EventType.CODE_COMMIT;
 
-  constructor(payload: CodeGeneratedEventType) {
+  constructor(payload: RequestCommitGitDto) {
     super(payload);
   }
 
   // Static factory method that validates before creating
-  public create(payload: CodeGeneratedEventType): CodeGeneratedEvent {
-    return new CodeGeneratedEvent(payload);
+  public create(payload: RequestCommitGitDto): CodeCommitdEvent {
+    return new CodeCommitdEvent(payload);
   }
 
   // Instance validation method for IEventValidator interface
-  public validate(payload: CodeGeneratedEventType): boolean {
+  public validate(payload: RequestCommitGitDto): boolean {
     return (
-      !!payload?.task.id &&
-      !!payload?.modelToUse &&
+      !!payload?.task &&
+      typeof payload?.task.id === 'string' &&
+      !!payload?.task.language &&
+      typeof payload?.task.language === 'string' &&
+      typeof payload?.qualityResult === 'object' &&
+      !!payload?.outputPath &&
       typeof payload?.generatedCode === 'object' &&
       Object.keys(payload?.generatedCode).length > 0 &&
       typeof payload?.requirementAnalysis === 'object'

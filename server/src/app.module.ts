@@ -14,7 +14,14 @@ import { taskQueueConfig } from '@server/config/task-queue.config';
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
-      load: [authConfig, dbConfig, llMConfig, gitConfig, redisConfig, taskQueueConfig],
+      load: [
+        authConfig,
+        dbConfig,
+        llMConfig,
+        gitConfig,
+        redisConfig,
+        taskQueueConfig,
+      ],
       validate: configValidator,
     }),
     EventEmitterModule.forRoot(),

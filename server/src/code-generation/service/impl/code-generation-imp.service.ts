@@ -1,41 +1,31 @@
 // src/code-generation/services/code-generation.service.ts
 
 import { Injectable, Logger, Inject, OnModuleInit } from '@nestjs/common';
-import { ConfigType } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaClient, CodeLanguage, RequirementStatus } from '.prisma/client';
-import { Cluster as RedisCluster } from 'ioredis';
-import { LLMService } from '@server/core/llm/service/llm.service';
+import { LLMProvider } from '@server/config/llm.config';
+import { CodeGenerationService } from '@server/code-generation/service/code-generation.service';
 import { LLMIntegrationService } from '@server/core/llm/service/llm-integration.service';
-import { RequirementQueueService } from '@server/requirement-task/service/requirement-queue.service';
 import { RequirementTaskService } from '@server/requirement-task/service/requirement-task.service';
 import { GitIntegrationService } from '@server/git-integration/service/git-integration.service';
 import { QualityCheckService } from '@server/quality-check/service/quality-check.service';
 import {
-  RequestLLMDto,
-  RequestLLMWithOllamaDto,
-  AnalyzeLLMWithOllamaDto,
-  RequestLLMWithOllamaKevinDto,
-  OllamaModelTestDto,
-} from '@server/core/llm/dto/llm.dto';
-import {
   PRISMA_REPOSITORY,
-  REDIS_REPOSITORY,
   REQUIREMENT_TASK_SERVICE,
-  REQUIREMENT_QUEUE_SERVICE,
-  LLM_SERVICE,
   LLM_INTEGRATION_SERVICE,
   GIT_INTEGRATION_SERVICE,
   QUALITY_CHECK_SERVICE,
 } from '@server/constants';
-import { LLMProvider } from '@server/config/llm.config';
+import { CodeGeneratedEvent } from '@server/code-generation/event/code-generate.event';
+import { EventType } from '@server/core/event/event';
 
 /**
  * CodeGenerationServiceImpl
- * 
+ *
  * This service handles requirement analysis and code generation using various LLMs,
  * especially Ollama models. It supports model selection, code quality checks, and
  * Git integration for generated code.
- * 
+ *
  * Guide for using Ollama models:
  * - Always check Ollama availability before using any model.
  * - Use DeepSeek Chat for requirement analysis.
@@ -44,13 +34,17 @@ import { LLMProvider } from '@server/config/llm.config';
  * - Always verify code quality.
  */
 @Injectable()
-export class CodeGenerationServiceImpl implements OnModuleInit {
+export class CodeGenerationServiceImpl
+  implements OnModuleInit, CodeGenerationService
+{
   private readonly logger = new Logger(CodeGenerationServiceImpl.name);
   // System message for LLM context
   private readonly systemMessage =
     'You are a helpful assistant specialized in software development.';
 
   constructor(
+    private readonly eventEmitter: EventEmitter2,
+
     @Inject(PRISMA_REPOSITORY)
     private prismaRepository: PrismaClient,
 
@@ -70,23 +64,23 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
   /**
    * Service initialization
    */
-  async onModuleInit() {
+  public async onModuleInit() {
     this.logger.log('Code Generation Service initialized');
   }
 
   /**
    * Process a requirement task.
    * This method is triggered when a requirement task is ready.
-   * 
+   *
    * Steps:
    * 1. Analyze requirement (prefer Ollama DeepSeek Chat if available)
    * 2. Generate code (prefer Kevin or DeepSeek Coder if available)
    * 3. Check code quality
    * 4. Commit code to Git
-   * 
+   *
    * @param taskId Task ID to process
    */
-  async processRequirement(taskId: string): Promise<void> {
+  public async processRequirement(taskId: string): Promise<void> {
     try {
       // Fetch task details from DB
       const task = await this.prismaRepository.requirementTask.findUnique({
@@ -144,10 +138,11 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
       // 3. Code generation (prefer Kevin, fallback to DeepSeek Coder)
       let generatedCode;
+      let modelToUse = LLMProvider.OPENAI; // Declare and assign modelToUse
       if (useOllama) {
         const kevinAvailable =
           await this.llmIntegrationService.testSpecificOllamaModel({
-            modelName: 'kevin',
+            modelName: LLMProvider.OLLAMA_KEVIN,
             systemMessage: this.systemMessage,
           });
 
@@ -166,6 +161,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
               systemMessage: this.systemMessage,
             });
           generatedCode = this.extractJsonFromText(kevinResponse);
+          modelToUse = LLMProvider.OLLAMA_KEVIN;
         } else {
           generatedCode =
             await this.llmIntegrationService.generateCodeWithOllamaModel({
@@ -176,6 +172,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
               provider: LLMProvider.OLLAMA_DEEPSEEK_CODER,
               temperature: 0.2,
             });
+          modelToUse = LLMProvider.OLLAMA_DEEPSEEK_CODER;
         }
       } else {
         generatedCode = await this.generateCode(
@@ -184,76 +181,13 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
         );
       }
 
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.in_progress,
-        progress: 0.5,
-        details: {
-          message: 'Code generated',
-        },
-      });
-
-      // 4. Code quality check
-      const qualityResult = await this.qualityCheckService.checkCodeQuality(
+      const codeGeneratedEvent = new CodeGeneratedEvent({
+        modelToUse,
+        task,
         generatedCode,
         requirementAnalysis,
-        task.language,
-        taskId,
-      );
-
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.in_progress,
-        progress: 0.7,
-        details: {
-          message: 'Code quality verified',
-          qualityResult: {
-            passed: qualityResult.passed,
-            codeQualityScore: qualityResult.codeQualityScore,
-            requirementCoverageScore: qualityResult.requirementCoverageScore,
-            syntaxValidityScore: qualityResult.syntaxValidityScore,
-            feedback: qualityResult.feedback,
-          },
-        },
       });
-
-      // 5. Commit code to Git
-      const outputPath =
-        task.output_path ||
-        this.determineOutputPath(requirementAnalysis, task.language);
-
-      const commitResult = await this.gitIntegrationService.commitToGit({
-        repositoryUrl: task.repository_url,
-        branch: task.branch,
-        generatedCode,
-        outputPath,
-        requirementText: task.requirement_text,
-        requirementAnalysis,
-      });
-
-      // Final status update
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.completed,
-        progress: 1.0,
-        details: {
-          message:
-            'Code generated, quality verified, and committed to repository',
-          commitHash: commitResult.commitHash,
-          filesChanged: commitResult.filesChanged,
-          generatedWith: useOllama ? 'Ollama' : 'Default LLM',
-          qualityPassed: qualityResult.passed,
-          qualityScores: {
-            overall:
-              qualityResult.codeQualityScore * 0.5 +
-              qualityResult.requirementCoverageScore * 0.3 +
-              qualityResult.syntaxValidityScore * 0.2,
-            codeQuality: qualityResult.codeQualityScore,
-            requirementCoverage: qualityResult.requirementCoverageScore,
-            syntaxValidity: qualityResult.syntaxValidityScore,
-          },
-        },
-      });
+      this.eventEmitter.emit(EventType.CODE_GENERATION, codeGeneratedEvent);
     } catch (error) {
       this.logger.error(
         `Error processing task ${taskId}: ${error.message}`,
@@ -270,13 +204,13 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Process a requirement task with a specific Ollama model.
-   * 
+   *
    * @param taskId Task ID to process
    * @param modelName Optional model name (e.g., 'kevin', 'deepseek-coder')
    */
-  async processRequirementWithSpecificModel(
+  public async processRequirementWithSpecificModel(
     taskId: string,
-    modelName?: string,
+    requestedModel: LLMProvider = LLMProvider.OPENAI,
   ): Promise<void> {
     try {
       // Fetch task details
@@ -295,80 +229,40 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
         progress: 0.1,
         details: {
           message: 'Starting requirement analysis',
-          requestedModel: modelName || 'default',
+          requestedModel,
         },
       });
 
-      // Model selection logic
-      let modelToUse = '';
-      let modelProvider: LLMProvider | null = null;
-
-      if (modelName) {
+      if (requestedModel.includes('ollama')) {
         // Check if requested model is available
         const isAvailable =
           await this.llmIntegrationService.testSpecificOllamaModel({
-            modelName,
+            modelName: requestedModel,
             systemMessage: this.systemMessage,
           });
 
-        if (isAvailable) {
-          modelToUse = modelName;
-          // Convert model name to provider enum
-          modelProvider = `ollama-${modelName}`
-            .replace(/-/g, '_')
-            .toUpperCase() as LLMProvider;
-          this.logger.log(`Using requested model: ${modelName}`);
-        } else {
-          this.logger.warn(
-            `Requested model ${modelName} is not available, checking alternatives`,
+        if (!isAvailable) {
+          throw new Error(
+            `Requested ollama model ${requestedModel} is not available, checking alternatives`,
           );
-        }
-      }
-
-      // If no specific model, select by priority
-      if (!modelProvider) {
-        const ollamaStatus =
-          await this.llmIntegrationService.checkOllamaAvailability();
-
-        if (ollamaStatus.available) {
-          // Priority: kevin > deepseek-coder > llama3 > qwen2
-          const priorityModels = ['kevin', 'deepseek-coder', 'llama3', 'qwen2'];
-
-          for (const model of priorityModels) {
-            const modelEnum = `OLLAMA_${model
-              .toUpperCase()
-              .replace(/-/g, '_')}` as keyof typeof LLMProvider;
-            if (
-              ollamaStatus.models.includes(LLMProvider[modelEnum]) ||
-              (await this.llmIntegrationService.testSpecificOllamaModel({
-                modelName: model,
-                systemMessage: this.systemMessage,
-              }))
-            ) {
-              modelToUse = model;
-              modelProvider = LLMProvider[modelEnum];
-              this.logger.log(`Selected model based on availability: ${model}`);
-              break;
-            }
-          }
         }
       }
 
       // Requirement analysis
       let requirementAnalysis;
 
-      if (modelToUse) {
-        // Use specific Ollama model for analysis
-        if (modelToUse === 'deepseek-chat') {
-          requirementAnalysis =
-            await this.llmIntegrationService.analyzeRequirementWithOllama({
-              requirementContext: task.requirement_text,
-              language: task.language,
-              systemMessage: this.systemMessage,
-            });
-        } else {
-          // Use specified model with custom prompt
-          const analysisPrompt = `
+      if (requestedModel.includes('ollama')) {
+        switch (requestedModel) {
+          case LLMProvider.OLLAMA_DEEPSEEK_CHAT:
+            requirementAnalysis =
+              await this.llmIntegrationService.analyzeRequirementWithOllama({
+                requirementContext: task.requirement_text,
+                language: task.language,
+                systemMessage: this.systemMessage,
+              });
+            break;
+          default:
+            const analysisPrompt = `
             Analyze the following software requirement and break it down into structured components.
             The code will be implemented in ${task.language.toLowerCase()}.
             
@@ -384,19 +278,18 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
             6. Suggested file structure for implementation
           `;
 
-          const result = await this.llmIntegrationService.callLLmApi({
-            prompt: analysisPrompt,
-            systemMessage: this.systemMessage,
-            options: {
-              provider: modelProvider,
-              useFallback: true,
-            },
-          });
+            const result = await this.llmIntegrationService.callLLmApi({
+              prompt: analysisPrompt,
+              systemMessage: this.systemMessage,
+              options: {
+                provider: requestedModel,
+                useFallback: true,
+              },
+            });
 
-          requirementAnalysis = this.parseAnalysisResult(result);
+            requirementAnalysis = this.parseAnalysisResult(result);
         }
       } else {
-        // Fallback to default analysis
         requirementAnalysis = await this.analyzeRequirement(
           task.requirement_text,
           task.language,
@@ -410,121 +303,54 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
         details: {
           message: 'Requirement analyzed',
           analysis: requirementAnalysis,
-          analysisModel: modelToUse || 'default',
+          analysisModel: requestedModel,
         },
       });
 
       // Code generation
       let generatedCode;
 
-      if (modelToUse) {
-        if (modelToUse === 'kevin') {
-          // Use Kevin model
-          const kevinResponse =
-            await this.llmIntegrationService.generateWithKevinModel({
-              prompt:
-                `Generate code in ${task.language.toLowerCase()} for: ${
-                  requirementAnalysis.title
-                }\n` +
-                `Functionality: ${requirementAnalysis.functionality}\n` +
-                `Components: ${this.formatList(
-                  requirementAnalysis.components,
-                )}`,
-              systemMessage: this.systemMessage,
-            });
-          generatedCode = this.extractJsonFromText(kevinResponse);
-        } else {
-          // Use specified model
-          generatedCode =
-            await this.llmIntegrationService.generateCodeWithOllamaModel({
-              requirementAnalysis,
-              language: task.language,
-              languageContext: this.getLanguageContext(task.language),
-              systemMessage: this.systemMessage,
-              provider: modelProvider,
-              temperature: 0.2,
-            });
+      if (requestedModel.includes('ollama')) {
+        switch (requestedModel) {
+          case LLMProvider.OLLAMA_KEVIN:
+            const kevinResponse =
+              await this.llmIntegrationService.generateWithKevinModel({
+                prompt:
+                  `Generate code in ${task.language.toLowerCase()} for: ${
+                    requirementAnalysis.title
+                  }\n` +
+                  `Functionality: ${requirementAnalysis.functionality}\n` +
+                  `Components: ${this.formatList(
+                    requirementAnalysis.components,
+                  )}`,
+                systemMessage: this.systemMessage,
+              });
+            generatedCode = this.extractJsonFromText(kevinResponse);
+            break;
+          default:
+            generatedCode =
+              await this.llmIntegrationService.generateCodeWithOllamaModel({
+                requirementAnalysis,
+                language: task.language,
+                languageContext: this.getLanguageContext(task.language),
+                systemMessage: this.systemMessage,
+                provider: requestedModel,
+                temperature: 0.2,
+              });
         }
       } else {
-        // Fallback to default code generation
         generatedCode = await this.generateCode(
           requirementAnalysis,
           task.language,
         );
       }
-
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.in_progress,
-        progress: 0.5,
-        details: {
-          message: 'Code generated',
-          generationModel: modelToUse || 'default',
-        },
-      });
-
-      // Code quality check
-      const qualityResult = await this.qualityCheckService.checkCodeQuality(
+      const codeGeneratedEvent = new CodeGeneratedEvent({
+        modelToUse: requestedModel,
+        task,
         generatedCode,
         requirementAnalysis,
-        task.language,
-        taskId,
-      );
-
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.in_progress,
-        progress: 0.7,
-        details: {
-          message: 'Code quality verified',
-          qualityResult: {
-            passed: qualityResult.passed,
-            codeQualityScore: qualityResult.codeQualityScore,
-            requirementCoverageScore: qualityResult.requirementCoverageScore,
-            syntaxValidityScore: qualityResult.syntaxValidityScore,
-            feedback: qualityResult.feedback,
-          },
-        },
       });
-
-      // Commit code to Git
-      const outputPath =
-        task.output_path ||
-        this.determineOutputPath(requirementAnalysis, task.language);
-
-      const commitResult = await this.gitIntegrationService.commitToGit({
-        repositoryUrl: task.repository_url,
-        branch: task.branch,
-        generatedCode,
-        outputPath,
-        requirementText: task.requirement_text,
-        requirementAnalysis,
-      });
-
-      // Final status update
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.completed,
-        progress: 1.0,
-        details: {
-          message:
-            'Code generated, quality verified, and committed to repository',
-          commitHash: commitResult.commitHash,
-          filesChanged: commitResult.filesChanged,
-          analysisModel: modelToUse || 'default',
-          generationModel: modelToUse || 'default',
-          qualityPassed: qualityResult.passed,
-          qualityScores: {
-            overall:
-              qualityResult.codeQualityScore * 0.5 +
-              qualityResult.requirementCoverageScore * 0.3 +
-              qualityResult.syntaxValidityScore * 0.2,
-            codeQuality: qualityResult.codeQualityScore,
-            requirementCoverage: qualityResult.requirementCoverageScore,
-            syntaxValidity: qualityResult.syntaxValidityScore,
-          },
-        },
-      });
+      this.eventEmitter.emit(EventType.CODE_GENERATION, codeGeneratedEvent);
     } catch (error) {
       this.logger.error(
         `Error processing task with specific model ${taskId}: ${error.message}`,
@@ -541,16 +367,18 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Generate code with multiple Ollama models for comparison.
-   * 
+   *
    * Steps:
    * 1. Analyze requirement (DeepSeek Chat)
    * 2. Generate code with multiple models
    * 3. Select best output (by file count)
    * 4. Commit best output to main branch, others to comparison branches
-   * 
+   *
    * @param taskId Task ID to process
    */
-  async processRequirementWithModelComparison(taskId: string): Promise<void> {
+  public async processRequirementWithModelComparison(
+    taskId: string,
+  ): Promise<void> {
     try {
       // Fetch task details
       const task = await this.prismaRepository.requirementTask.findUnique({
@@ -602,10 +430,12 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
           language: task.language,
           languageContext: this.getLanguageContext(task.language),
           systemMessage: this.systemMessage,
+          provider: LLMProvider.OLLAMA_DEEPSEEK_CHAT,
+          temperature: 0.2,
         });
 
       // Select best model output (by file count)
-      let bestModel = '';
+      let bestModel = LLMProvider.OLLAMA_DEEPSEEK_CHAT;
       let maxFileCount = 0;
       let bestModelCode = {};
 
@@ -613,7 +443,6 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
         const fileCount = Object.keys(codeFiles).length;
         if (fileCount > maxFileCount) {
           maxFileCount = fileCount;
-          bestModel = model;
           bestModelCode = codeFiles;
         }
       }
@@ -631,152 +460,16 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
             systemMessage: this.systemMessage,
           });
         bestModelCode = this.extractJsonFromText(kevinResponse);
-        bestModel = 'kevin-fallback';
+        bestModel = LLMProvider.OLLAMA_KEVIN;
       }
 
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.in_progress,
-        progress: 0.5,
-        details: {
-          message: 'Code generated with multiple models',
-          modelComparison: Object.keys(multiModelResults).map((model) => ({
-            model,
-            fileCount: Object.keys(multiModelResults[model]).length,
-          })),
-          selectedModel: bestModel,
-        },
-      });
-
-      // Code quality check for best model
-      const qualityResult = await this.qualityCheckService.checkCodeQuality(
-        bestModelCode as Record<string, string>,
-        requirementAnalysis,
-        task.language,
-        taskId,
-      );
-
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.in_progress,
-        progress: 0.7,
-        details: {
-          message: 'Code quality verified',
-          qualityResult: {
-            passed: qualityResult.passed,
-            codeQualityScore: qualityResult.codeQualityScore,
-            requirementCoverageScore: qualityResult.requirementCoverageScore,
-            syntaxValidityScore: qualityResult.syntaxValidityScore,
-            feedback: qualityResult.feedback,
-          },
-        },
-      });
-
-      // Commit best model code to main branch
-      const outputPath =
-        task.output_path ||
-        this.determineOutputPath(requirementAnalysis, task.language);
-
-      const commitResult = await this.gitIntegrationService.commitToGit({
-        repositoryUrl: task.repository_url,
-        branch: task.branch,
-        generatedCode: bestModelCode as Record<string, string>,
-        outputPath,
-        requirementText: task.requirement_text,
+      const codeGeneratedEvent = new CodeGeneratedEvent({
+        modelToUse: bestModel,
+        task,
+        generatedCode: bestModelCode,
         requirementAnalysis,
       });
-
-      // Commit all model outputs to comparison branches
-      const comparisonBranches = [];
-
-      for (const [modelKey, codeFiles] of Object.entries(multiModelResults)) {
-        // Skip best model and empty results
-        if (modelKey !== bestModel && Object.keys(codeFiles).length > 0) {
-          try {
-            // Clean model name for branch
-            const cleanModelName = modelKey
-              .replace(/OLLAMA_|ollama-|ollama_/i, '')
-              .toLowerCase();
-            const modelBranch = `${task.branch}-${cleanModelName}`;
-
-            // Type safety for code files
-            const typedCodeFiles: Record<string, string> = {};
-
-            let isValid = true;
-            for (const [filePath, content] of Object.entries(codeFiles)) {
-              if (typeof filePath === 'string' && typeof content === 'string') {
-                typedCodeFiles[filePath] = content;
-              } else {
-                this.logger.warn(
-                  `Invalid entry in model ${modelKey} output: ${filePath} -> ${typeof content}`,
-                );
-                isValid = false;
-                break;
-              }
-            }
-
-            if (!isValid || Object.keys(typedCodeFiles).length === 0) {
-              this.logger.warn(
-                `Skipping commit for model ${modelKey} due to invalid output format`,
-              );
-              continue;
-            }
-
-            // Commit message with model info
-            const modelCommitText = `${task.requirement_text} (Generated with ${cleanModelName} model)`;
-
-            const modelCommitResult =
-              await this.gitIntegrationService.commitToGit({
-                repositoryUrl: task.repository_url,
-                branch: modelBranch,
-                generatedCode: typedCodeFiles,
-                outputPath,
-                requirementText: modelCommitText,
-                requirementAnalysis,
-              });
-
-            comparisonBranches.push({
-              model: cleanModelName,
-              branch: modelBranch,
-              commitHash: modelCommitResult.commitHash,
-              fileCount: Object.keys(typedCodeFiles).length,
-            });
-
-            this.logger.log(
-              `Successfully committed ${cleanModelName} output to branch ${modelBranch}`,
-            );
-          } catch (error) {
-            this.logger.warn(
-              `Failed to commit ${modelKey} output: ${error.message}`,
-            );
-          }
-        }
-      }
-
-      // Final status update
-      await this.requirementTaskService.updateTaskStatus({
-        taskId,
-        status: RequirementStatus.completed,
-        progress: 1.0,
-        details: {
-          message:
-            'Code generated with multiple models, quality verified, and committed to repository',
-          commitHash: commitResult.commitHash,
-          filesChanged: commitResult.filesChanged,
-          generatedWith: bestModel,
-          comparisonBranches,
-          qualityPassed: qualityResult.passed,
-          qualityScores: {
-            overall:
-              qualityResult.codeQualityScore * 0.5 +
-              qualityResult.requirementCoverageScore * 0.3 +
-              qualityResult.syntaxValidityScore * 0.2,
-            codeQuality: qualityResult.codeQualityScore,
-            requirementCoverage: qualityResult.requirementCoverageScore,
-            syntaxValidity: qualityResult.syntaxValidityScore,
-          },
-        },
-      });
+      this.eventEmitter.emit(EventType.CODE_GENERATION, codeGeneratedEvent);
     } catch (error) {
       this.logger.error(
         `Error processing task with model comparison ${taskId}: ${error.message}`,
@@ -793,7 +486,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Analyze and understand a requirement using LLM.
-   * 
+   *
    * @param requirementText The raw requirement text
    * @param language Target programming language
    * @private
@@ -821,7 +514,9 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
     const result = await this.llmIntegrationService.callLLmApi({
       prompt,
       systemMessage: this.systemMessage,
-      options: {},
+      options: {
+        // use default LLMProvider.OPENAI
+      },
     });
 
     // Parse the LLM response into a structured format
@@ -830,7 +525,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Generate code based on the analyzed requirement.
-   * 
+   *
    * @param requirementAnalysis Structured analysis of the requirement
    * @param language Target programming language
    * @private
@@ -871,7 +566,9 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
     const result = await this.llmIntegrationService.callLLmApi({
       prompt,
       systemMessage: this.systemMessage,
-      options: {},
+      options: {
+        // use default LLMProvider.OPENAI
+      },
     });
 
     // Extract the code from the LLM response
@@ -886,7 +583,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Get language-specific context for code generation.
-   * 
+   *
    * @param language Target programming language
    * @private
    */
@@ -935,70 +632,8 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
   }
 
   /**
-   * Determine the appropriate output path based on requirement analysis.
-   * 
-   * @param analysis Requirement analysis
-   * @param language Target programming language
-   * @private
-   */
-  private determineOutputPath(
-    analysis: Record<string, any>,
-    language: CodeLanguage,
-  ): string {
-    // Default paths based on language
-    const defaultPaths = {
-      typescript: 'src',
-      javascript: 'src',
-      python: 'src',
-      java: 'src/main/java',
-      go: 'pkg',
-      rust: 'src',
-      csharp: 'src',
-      ruby: 'lib',
-      php: 'src',
-    };
-
-    // Try to infer a meaningful path from the analysis
-    if (analysis.fileStructure && analysis.fileStructure.length > 0) {
-      // Look for common root directory in file structure
-      const paths = analysis.fileStructure
-        .map((file) => {
-          if (typeof file === 'string') {
-            const parts = file.split('/');
-            return parts[0];
-          }
-          return null;
-        })
-        .filter(Boolean);
-
-      if (paths.length > 0) {
-        // Use most common directory
-        const pathCounts = {};
-        let maxCount = 0;
-        let mostCommonPath = '';
-
-        for (const p of paths) {
-          pathCounts[p] = (pathCounts[p] || 0) + 1;
-          if (pathCounts[p] > maxCount) {
-            maxCount = pathCounts[p];
-            mostCommonPath = p;
-          }
-        }
-
-        if (mostCommonPath) {
-          return mostCommonPath;
-        }
-      }
-    }
-
-    // Fallback to default path for the language
-    const languageKey = language.toString().toLowerCase();
-    return defaultPaths[languageKey] || 'src';
-  }
-
-  /**
    * Parse analysis result from LLM response.
-   * 
+   *
    * @param result LLM response text
    * @private
    */
@@ -1015,7 +650,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Extract a title from LLM response.
-   * 
+   *
    * @param text LLM response text
    * @private
    */
@@ -1027,7 +662,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Extract a specific section from LLM response.
-   * 
+   *
    * @param text LLM response text
    * @param section Section name to extract
    * @private
@@ -1043,7 +678,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Extract components from LLM response.
-   * 
+   *
    * @param text LLM response text
    * @private
    */
@@ -1065,7 +700,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Extract file structure from LLM response.
-   * 
+   *
    * @param text LLM response text
    * @private
    */
@@ -1090,7 +725,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Format a list of items for prompting.
-   * 
+   *
    * @param items List of items
    * @private
    */
@@ -1104,7 +739,7 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
 
   /**
    * Extract JSON from text response when direct parsing fails.
-   * 
+   *
    * @param text LLM response text
    * @private
    */

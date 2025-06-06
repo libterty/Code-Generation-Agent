@@ -8,7 +8,10 @@ import { RedisClientModule } from '@server/core/redis-client/redis-client.module
 import { RequirementQueueServiceImpl } from '@server/requirement-task/service/impl/requirement-queue-impl.service';
 import { RequirementTaskController } from '@server/requirement-task/controller/requirement-task.controller';
 import { redisConfig } from '@server/config/redis.config';
-import { REQUIREMENT_QUEUE_SERVICE, REQUIREMENT_TASK_SERVICE } from '@server/constants';
+import {
+  REQUIREMENT_QUEUE_SERVICE,
+  REQUIREMENT_TASK_SERVICE,
+} from '@server/constants';
 import { RequirementTaskServiceImpl } from './service/impl/requirement-task-impl.service';
 
 const providers = [
@@ -27,11 +30,9 @@ const providers = [
     ConfigModule.forFeature(redisConfig),
     HttpModule,
     PrismaModule,
-    RedisClientModule
+    RedisClientModule,
   ],
-  controllers: [
-    RequirementTaskController
-  ],
+  controllers: [RequirementTaskController],
   providers: providers,
   exports: providers,
 })

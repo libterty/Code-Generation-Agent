@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AnalysisResult, FeaturePriority, ConstraintType } from '@server/requirement-analysis/service/requirement-analysis.service';
+import {
+  AnalysisResult,
+  FeaturePriority,
+  ConstraintType,
+} from '@server/requirement-analysis/service/requirement-analysis.service';
 import { StructuralAnalyzerProvider } from '@server/requirement-analysis/provider/structural-analyzer.provider';
 
 @Injectable()
-export class StructuralAnalyzerProviderImpl implements StructuralAnalyzerProvider {
+export class StructuralAnalyzerProviderImpl
+  implements StructuralAnalyzerProvider
+{
   private readonly logger = new Logger(StructuralAnalyzerProviderImpl.name);
 
   /**
@@ -20,7 +26,7 @@ export class StructuralAnalyzerProviderImpl implements StructuralAnalyzerProvide
 
       // 標準化特徵
       const features = Array.isArray(rawAnalysis.features)
-        ? rawAnalysis.features.map(feature => ({
+        ? rawAnalysis.features.map((feature) => ({
             name: feature.name || '未命名特徵',
             description: feature.description || '',
             priority: this.normalizePriority(feature.priority),
@@ -29,16 +35,20 @@ export class StructuralAnalyzerProviderImpl implements StructuralAnalyzerProvide
 
       // 標準化實體
       const entities = Array.isArray(rawAnalysis.entities)
-        ? rawAnalysis.entities.map(entity => ({
+        ? rawAnalysis.entities.map((entity) => ({
             name: entity.name || '未命名實體',
-            attributes: Array.isArray(entity.attributes) ? entity.attributes : [],
-            relationships: Array.isArray(entity.relationships) ? entity.relationships : [],
+            attributes: Array.isArray(entity.attributes)
+              ? entity.attributes
+              : [],
+            relationships: Array.isArray(entity.relationships)
+              ? entity.relationships
+              : [],
           }))
         : [];
 
       // 標準化約束
       const constraints = Array.isArray(rawAnalysis.constraints)
-        ? rawAnalysis.constraints.map(constraint => ({
+        ? rawAnalysis.constraints.map((constraint) => ({
             type: this.normalizeConstraintType(constraint.type),
             description: constraint.description || '',
           }))
@@ -92,7 +102,7 @@ export class StructuralAnalyzerProviderImpl implements StructuralAnalyzerProvide
    */
   private normalizePriority(priority: string): FeaturePriority {
     if (!priority) return FeaturePriority.MEDIUM;
-    
+
     const lowerPriority = priority.toLowerCase();
     if (lowerPriority.includes('嚴重') || lowerPriority.includes('critical')) {
       return FeaturePriority.CRITICAL;
@@ -112,9 +122,9 @@ export class StructuralAnalyzerProviderImpl implements StructuralAnalyzerProvide
    */
   private normalizeConstraintType(type: string): ConstraintType {
     if (!type) return ConstraintType.TECHNICAL;
-    
+
     const lowerType = type.toLowerCase();
-    
+
     if (lowerType.includes('業務') || lowerType.includes('business')) {
       return ConstraintType.BUSINESS;
     } else if (lowerType.includes('安全') || lowerType.includes('security')) {

@@ -6,10 +6,10 @@ export class RequirementRequestDto {
   repositoryUrl: string;
   branch: string;
   requirementText: string;
-  @Transform(({ value }) => value ? value : TaskPriority.medium)
-  priority?: TaskPriority
+  @Transform(({ value }) => (value ? value : TaskPriority.medium))
+  priority?: TaskPriority;
   additionalContext?: Record<string, any>;
-  @Transform(({ value }) => value ? value : CodeLanguage.typescript)
+  @Transform(({ value }) => (value ? value : CodeLanguage.typescript))
   language?: CodeLanguage;
   outputPath?: string;
   templateId?: string;
@@ -31,7 +31,7 @@ export class TaskStatusDto {
   queueInfo: {
     state: string;
     progress?: number;
-  }
+  };
   qualityMetrics?: {
     codeQualityScore: number;
     requirementCoverageScore: number;
@@ -51,14 +51,14 @@ export class QueueStatsDto {
 
 export class QueryRequirementTaskDto {
   projectId?: string;
-  status?: RequirementStatus
+  status?: RequirementStatus;
 }
 
 export class UpdateTaskStatusDto {
-    taskId: string;
-    status: RequirementStatus;
-    progress: number;
-    details: Record<string, any> 
+  taskId: string;
+  status: RequirementStatus;
+  progress: number;
+  details: Record<string, any>;
 }
 
 export class UpdateTaskQualityMetricsDto {
@@ -67,5 +67,5 @@ export class UpdateTaskQualityMetricsDto {
   requirementCoverageScore: number;
   syntaxValidityScore: number;
   staticAnalysisResults?: Record<string, any>;
-  feedback?: string
+  feedback?: string;
 }

@@ -1,11 +1,8 @@
-
 import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { PrismaModule } from '@server/core/prisma/prisma.module';
 import { RequirementAnalysisServiceImpl } from '@server/requirement-analysis/service/impl/requirement-analysis-impl.service';
-import {
-  REQUIREMENT_ANALYSIS_SERVICE
-} from '@server/constants';
+import { REQUIREMENT_ANALYSIS_SERVICE } from '@server/constants';
 
 const providers = [
   {
@@ -15,10 +12,7 @@ const providers = [
 ];
 
 @Module({
-  imports: [
-    HttpModule,
-    PrismaModule,
-  ],
+  imports: [HttpModule, PrismaModule],
   controllers: [],
   providers,
   exports: providers,
