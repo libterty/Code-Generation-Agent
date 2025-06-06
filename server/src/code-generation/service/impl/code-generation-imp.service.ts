@@ -1,151 +1,807 @@
 // src/code-generation/services/code-generation.service.ts
 
 import { Injectable, Logger, Inject, OnModuleInit } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
 import { ConfigType } from '@nestjs/config';
-import { lastValueFrom } from 'rxjs';
 import { PrismaClient, CodeLanguage, RequirementStatus } from '.prisma/client';
 import { Cluster as RedisCluster } from 'ioredis';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import simpleGit from 'simple-git';
 import { LLMService } from '@server/core/llm/service/llm.service';
+import { LLMIntegrationService } from '@server/core/llm/service/llm-integration.service';
 import { RequirementQueueService } from '@server/requirement-task/service/requirement-queue.service';
 import { RequirementTaskService } from '@server/requirement-task/service/requirement-task.service';
-import { RequestLLMDto } from '@server/core/llm/dto/llm.dto';
-import { PRISMA_REPOSITORY, REDIS_REPOSITORY, REQUIREMENT_TASK_SERVICE, REQUIREMENT_QUEUE_SERVICE, LLM_SERVICE } from '@server/constants';
+import { GitIntegrationService } from '@server/git-integration/service/git-integration.service';
+import { QualityCheckService } from '@server/quality-check/service/quality-check.service';
+import {
+  RequestLLMDto,
+  RequestLLMWithOllamaDto,
+  AnalyzeLLMWithOllamaDto,
+  RequestLLMWithOllamaKevinDto,
+  OllamaModelTestDto,
+} from '@server/core/llm/dto/llm.dto';
+import {
+  PRISMA_REPOSITORY,
+  REDIS_REPOSITORY,
+  REQUIREMENT_TASK_SERVICE,
+  REQUIREMENT_QUEUE_SERVICE,
+  LLM_SERVICE,
+  LLM_INTEGRATION_SERVICE,
+  GIT_INTEGRATION_SERVICE,
+  QUALITY_CHECK_SERVICE,
+} from '@server/constants';
 import { LLMProvider } from '@server/config/llm.config';
 
+/**
+ * CodeGenerationServiceImpl
+ * 
+ * This service handles requirement analysis and code generation using various LLMs,
+ * especially Ollama models. It supports model selection, code quality checks, and
+ * Git integration for generated code.
+ * 
+ * Guide for using Ollama models:
+ * - Always check Ollama availability before using any model.
+ * - Use DeepSeek Chat for requirement analysis.
+ * - Use Kevin or DeepSeek Coder for code generation.
+ * - Compare outputs from multiple models for important tasks.
+ * - Always verify code quality.
+ */
 @Injectable()
 export class CodeGenerationServiceImpl implements OnModuleInit {
   private readonly logger = new Logger(CodeGenerationServiceImpl.name);
-  private readonly systemMessage = 'You are a helpful assistant specialized in software development.';
+  // System message for LLM context
+  private readonly systemMessage =
+    'You are a helpful assistant specialized in software development.';
 
   constructor(
-    private readonly httpService: HttpService,
-    
     @Inject(PRISMA_REPOSITORY)
     private prismaRepository: PrismaClient,
 
-    @Inject(REDIS_REPOSITORY)
-    private readonly redisRepository: RedisCluster,
-    
     @Inject(REQUIREMENT_TASK_SERVICE)
     private readonly requirementTaskService: RequirementTaskService,
 
-    @Inject(REQUIREMENT_QUEUE_SERVICE)
-    private readonly requirementQueueService: RequirementQueueService,
+    @Inject(GIT_INTEGRATION_SERVICE)
+    private readonly gitIntegrationService: GitIntegrationService,
 
-    @Inject(LLM_SERVICE)
-    private readonly llmService: LLMService,
+    @Inject(LLM_INTEGRATION_SERVICE)
+    private readonly llmIntegrationService: LLMIntegrationService,
+
+    @Inject(QUALITY_CHECK_SERVICE)
+    private readonly qualityCheckService: QualityCheckService,
   ) {}
 
   /**
-   * Initialize the service
+   * Service initialization
    */
   async onModuleInit() {
     this.logger.log('Code Generation Service initialized');
   }
 
   /**
-   * Process a requirement task
-   * This method will be called by the RequirementTaskService when a task is ready
+   * Process a requirement task.
+   * This method is triggered when a requirement task is ready.
+   * 
+   * Steps:
+   * 1. Analyze requirement (prefer Ollama DeepSeek Chat if available)
+   * 2. Generate code (prefer Kevin or DeepSeek Coder if available)
+   * 3. Check code quality
+   * 4. Commit code to Git
+   * 
    * @param taskId Task ID to process
    */
   async processRequirement(taskId: string): Promise<void> {
     try {
-      // Get the task details from the database
+      // Fetch task details from DB
       const task = await this.prismaRepository.requirementTask.findUnique({
-        where: { id: taskId }
+        where: { id: taskId },
       });
-      
+
       if (!task) {
         throw new Error(`Task with ID ${taskId} not found`);
       }
 
-      // Update status to processing
+      // Update status: starting analysis
       await this.requirementTaskService.updateTaskStatus({
-        taskId, 
-        status: RequirementStatus.in_progress, 
-        progress :0.1, 
-        details: { message: 'Starting requirement analysis' }
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.1,
+        details: { message: 'Starting requirement analysis' },
       });
 
-      // Step 1: Analyze and understand the requirement
-      const requirementAnalysis = await this.analyzeRequirement(
-        task.requirement_text, 
-        task.language
+      // 1. Check Ollama availability
+      const ollamaStatus =
+        await this.llmIntegrationService.checkOllamaAvailability();
+      const useOllama = ollamaStatus.available;
+
+      this.logger.log(
+        `Ollama availability: ${
+          useOllama ? 'Available' : 'Unavailable'
+        }, Models: ${ollamaStatus.models.join(', ')}`,
       );
-      
+
+      // 2. Requirement analysis (prefer DeepSeek Chat)
+      let requirementAnalysis;
+      if (useOllama) {
+        requirementAnalysis =
+          await this.llmIntegrationService.analyzeRequirementWithOllama({
+            requirementContext: task.requirement_text,
+            language: task.language,
+            systemMessage: this.systemMessage,
+          });
+      } else {
+        requirementAnalysis = await this.analyzeRequirement(
+          task.requirement_text,
+          task.language,
+        );
+      }
+
       await this.requirementTaskService.updateTaskStatus({
-        taskId, 
-        status: RequirementStatus.in_progress, 
-        progress: 0.3, 
-        details: { 
-          message: 'Requirement analyzed', 
-          analysis: requirementAnalysis 
-        }
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.3,
+        details: {
+          message: 'Requirement analyzed',
+          analysis: requirementAnalysis,
+        },
       });
 
-      // Step 2: Generate code based on the requirement analysis
-      const generatedCode = await this.generateCode(
-        requirementAnalysis, 
-        task.language
+      // 3. Code generation (prefer Kevin, fallback to DeepSeek Coder)
+      let generatedCode;
+      if (useOllama) {
+        const kevinAvailable =
+          await this.llmIntegrationService.testSpecificOllamaModel({
+            modelName: 'kevin',
+            systemMessage: this.systemMessage,
+          });
+
+        if (kevinAvailable) {
+          this.logger.log('Using Kevin model for code generation');
+          const kevinResponse =
+            await this.llmIntegrationService.generateWithKevinModel({
+              prompt:
+                `Generate code in ${task.language.toLowerCase()} for: ${
+                  requirementAnalysis.title
+                }\n` +
+                `Functionality: ${requirementAnalysis.functionality}\n` +
+                `Components: ${this.formatList(
+                  requirementAnalysis.components,
+                )}`,
+              systemMessage: this.systemMessage,
+            });
+          generatedCode = this.extractJsonFromText(kevinResponse);
+        } else {
+          generatedCode =
+            await this.llmIntegrationService.generateCodeWithOllamaModel({
+              requirementAnalysis,
+              language: task.language,
+              languageContext: this.getLanguageContext(task.language),
+              systemMessage: this.systemMessage,
+              provider: LLMProvider.OLLAMA_DEEPSEEK_CODER,
+              temperature: 0.2,
+            });
+        }
+      } else {
+        generatedCode = await this.generateCode(
+          requirementAnalysis,
+          task.language,
+        );
+      }
+
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.5,
+        details: {
+          message: 'Code generated',
+        },
+      });
+
+      // 4. Code quality check
+      const qualityResult = await this.qualityCheckService.checkCodeQuality(
+        generatedCode,
+        requirementAnalysis,
+        task.language,
+        taskId,
       );
-      
+
       await this.requirementTaskService.updateTaskStatus({
-        taskId, 
-        status: RequirementStatus.in_progress, 
-        progress: 0.6, 
-        details: { 
-          message: 'Code generated'
-        }
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.7,
+        details: {
+          message: 'Code quality verified',
+          qualityResult: {
+            passed: qualityResult.passed,
+            codeQualityScore: qualityResult.codeQualityScore,
+            requirementCoverageScore: qualityResult.requirementCoverageScore,
+            syntaxValidityScore: qualityResult.syntaxValidityScore,
+            feedback: qualityResult.feedback,
+          },
+        },
       });
 
-      // Step 3: Commit the generated code to Git repository
-      const outputPath = task.output_path || this.determineOutputPath(requirementAnalysis, task.language);
-      
-      const commitResult = await this.commitToGit(
-        task.repository_url,
-        task.branch,
+      // 5. Commit code to Git
+      const outputPath =
+        task.output_path ||
+        this.determineOutputPath(requirementAnalysis, task.language);
+
+      const commitResult = await this.gitIntegrationService.commitToGit({
+        repositoryUrl: task.repository_url,
+        branch: task.branch,
         generatedCode,
         outputPath,
-        task.requirement_text,
-        requirementAnalysis
-      );
-
-      // Update final status
-      await this.requirementTaskService.updateTaskStatus({
-        taskId, 
-        status: RequirementStatus.completed,
-        progress: 1.0, 
-        details: {
-          message: 'Code generated and committed to repository',
-          commitHash: commitResult.commitHash,
-          filesChanged: commitResult.filesChanged
-        }
-      
+        requirementText: task.requirement_text,
+        requirementAnalysis,
       });
 
-    } catch (error) {
-      this.logger.error(`Error processing task ${taskId}: ${error.message}`, error.stack);
+      // Final status update
       await this.requirementTaskService.updateTaskStatus({
-        taskId, 
-        status: RequirementStatus.failed, 
-        progress: 0, 
-        details: { error: error.message }
+        taskId,
+        status: RequirementStatus.completed,
+        progress: 1.0,
+        details: {
+          message:
+            'Code generated, quality verified, and committed to repository',
+          commitHash: commitResult.commitHash,
+          filesChanged: commitResult.filesChanged,
+          generatedWith: useOllama ? 'Ollama' : 'Default LLM',
+          qualityPassed: qualityResult.passed,
+          qualityScores: {
+            overall:
+              qualityResult.codeQualityScore * 0.5 +
+              qualityResult.requirementCoverageScore * 0.3 +
+              qualityResult.syntaxValidityScore * 0.2,
+            codeQuality: qualityResult.codeQualityScore,
+            requirementCoverage: qualityResult.requirementCoverageScore,
+            syntaxValidity: qualityResult.syntaxValidityScore,
+          },
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Error processing task ${taskId}: ${error.message}`,
+        error.stack,
+      );
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.failed,
+        progress: 0,
+        details: { error: error.message },
       });
     }
   }
 
   /**
-   * Analyze and understand a requirement using LLM
+   * Process a requirement task with a specific Ollama model.
+   * 
+   * @param taskId Task ID to process
+   * @param modelName Optional model name (e.g., 'kevin', 'deepseek-coder')
+   */
+  async processRequirementWithSpecificModel(
+    taskId: string,
+    modelName?: string,
+  ): Promise<void> {
+    try {
+      // Fetch task details
+      const task = await this.prismaRepository.requirementTask.findUnique({
+        where: { id: taskId },
+      });
+
+      if (!task) {
+        throw new Error(`Task with ID ${taskId} not found`);
+      }
+
+      // Update status: starting analysis
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.1,
+        details: {
+          message: 'Starting requirement analysis',
+          requestedModel: modelName || 'default',
+        },
+      });
+
+      // Model selection logic
+      let modelToUse = '';
+      let modelProvider: LLMProvider | null = null;
+
+      if (modelName) {
+        // Check if requested model is available
+        const isAvailable =
+          await this.llmIntegrationService.testSpecificOllamaModel({
+            modelName,
+            systemMessage: this.systemMessage,
+          });
+
+        if (isAvailable) {
+          modelToUse = modelName;
+          // Convert model name to provider enum
+          modelProvider = `ollama-${modelName}`
+            .replace(/-/g, '_')
+            .toUpperCase() as LLMProvider;
+          this.logger.log(`Using requested model: ${modelName}`);
+        } else {
+          this.logger.warn(
+            `Requested model ${modelName} is not available, checking alternatives`,
+          );
+        }
+      }
+
+      // If no specific model, select by priority
+      if (!modelProvider) {
+        const ollamaStatus =
+          await this.llmIntegrationService.checkOllamaAvailability();
+
+        if (ollamaStatus.available) {
+          // Priority: kevin > deepseek-coder > llama3 > qwen2
+          const priorityModels = ['kevin', 'deepseek-coder', 'llama3', 'qwen2'];
+
+          for (const model of priorityModels) {
+            const modelEnum = `OLLAMA_${model
+              .toUpperCase()
+              .replace(/-/g, '_')}` as keyof typeof LLMProvider;
+            if (
+              ollamaStatus.models.includes(LLMProvider[modelEnum]) ||
+              (await this.llmIntegrationService.testSpecificOllamaModel({
+                modelName: model,
+                systemMessage: this.systemMessage,
+              }))
+            ) {
+              modelToUse = model;
+              modelProvider = LLMProvider[modelEnum];
+              this.logger.log(`Selected model based on availability: ${model}`);
+              break;
+            }
+          }
+        }
+      }
+
+      // Requirement analysis
+      let requirementAnalysis;
+
+      if (modelToUse) {
+        // Use specific Ollama model for analysis
+        if (modelToUse === 'deepseek-chat') {
+          requirementAnalysis =
+            await this.llmIntegrationService.analyzeRequirementWithOllama({
+              requirementContext: task.requirement_text,
+              language: task.language,
+              systemMessage: this.systemMessage,
+            });
+        } else {
+          // Use specified model with custom prompt
+          const analysisPrompt = `
+            Analyze the following software requirement and break it down into structured components.
+            The code will be implemented in ${task.language.toLowerCase()}.
+            
+            Requirement:
+            ${task.requirement_text}
+            
+            Please provide:
+            1. A clear title for this requirement
+            2. The main functionality being requested
+            3. Key components or modules needed
+            4. Expected inputs and outputs
+            5. Any dependencies or constraints mentioned
+            6. Suggested file structure for implementation
+          `;
+
+          const result = await this.llmIntegrationService.callLLmApi({
+            prompt: analysisPrompt,
+            systemMessage: this.systemMessage,
+            options: {
+              provider: modelProvider,
+              useFallback: true,
+            },
+          });
+
+          requirementAnalysis = this.parseAnalysisResult(result);
+        }
+      } else {
+        // Fallback to default analysis
+        requirementAnalysis = await this.analyzeRequirement(
+          task.requirement_text,
+          task.language,
+        );
+      }
+
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.3,
+        details: {
+          message: 'Requirement analyzed',
+          analysis: requirementAnalysis,
+          analysisModel: modelToUse || 'default',
+        },
+      });
+
+      // Code generation
+      let generatedCode;
+
+      if (modelToUse) {
+        if (modelToUse === 'kevin') {
+          // Use Kevin model
+          const kevinResponse =
+            await this.llmIntegrationService.generateWithKevinModel({
+              prompt:
+                `Generate code in ${task.language.toLowerCase()} for: ${
+                  requirementAnalysis.title
+                }\n` +
+                `Functionality: ${requirementAnalysis.functionality}\n` +
+                `Components: ${this.formatList(
+                  requirementAnalysis.components,
+                )}`,
+              systemMessage: this.systemMessage,
+            });
+          generatedCode = this.extractJsonFromText(kevinResponse);
+        } else {
+          // Use specified model
+          generatedCode =
+            await this.llmIntegrationService.generateCodeWithOllamaModel({
+              requirementAnalysis,
+              language: task.language,
+              languageContext: this.getLanguageContext(task.language),
+              systemMessage: this.systemMessage,
+              provider: modelProvider,
+              temperature: 0.2,
+            });
+        }
+      } else {
+        // Fallback to default code generation
+        generatedCode = await this.generateCode(
+          requirementAnalysis,
+          task.language,
+        );
+      }
+
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.5,
+        details: {
+          message: 'Code generated',
+          generationModel: modelToUse || 'default',
+        },
+      });
+
+      // Code quality check
+      const qualityResult = await this.qualityCheckService.checkCodeQuality(
+        generatedCode,
+        requirementAnalysis,
+        task.language,
+        taskId,
+      );
+
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.7,
+        details: {
+          message: 'Code quality verified',
+          qualityResult: {
+            passed: qualityResult.passed,
+            codeQualityScore: qualityResult.codeQualityScore,
+            requirementCoverageScore: qualityResult.requirementCoverageScore,
+            syntaxValidityScore: qualityResult.syntaxValidityScore,
+            feedback: qualityResult.feedback,
+          },
+        },
+      });
+
+      // Commit code to Git
+      const outputPath =
+        task.output_path ||
+        this.determineOutputPath(requirementAnalysis, task.language);
+
+      const commitResult = await this.gitIntegrationService.commitToGit({
+        repositoryUrl: task.repository_url,
+        branch: task.branch,
+        generatedCode,
+        outputPath,
+        requirementText: task.requirement_text,
+        requirementAnalysis,
+      });
+
+      // Final status update
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.completed,
+        progress: 1.0,
+        details: {
+          message:
+            'Code generated, quality verified, and committed to repository',
+          commitHash: commitResult.commitHash,
+          filesChanged: commitResult.filesChanged,
+          analysisModel: modelToUse || 'default',
+          generationModel: modelToUse || 'default',
+          qualityPassed: qualityResult.passed,
+          qualityScores: {
+            overall:
+              qualityResult.codeQualityScore * 0.5 +
+              qualityResult.requirementCoverageScore * 0.3 +
+              qualityResult.syntaxValidityScore * 0.2,
+            codeQuality: qualityResult.codeQualityScore,
+            requirementCoverage: qualityResult.requirementCoverageScore,
+            syntaxValidity: qualityResult.syntaxValidityScore,
+          },
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Error processing task with specific model ${taskId}: ${error.message}`,
+        error.stack,
+      );
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.failed,
+        progress: 0,
+        details: { error: error.message },
+      });
+    }
+  }
+
+  /**
+   * Generate code with multiple Ollama models for comparison.
+   * 
+   * Steps:
+   * 1. Analyze requirement (DeepSeek Chat)
+   * 2. Generate code with multiple models
+   * 3. Select best output (by file count)
+   * 4. Commit best output to main branch, others to comparison branches
+   * 
+   * @param taskId Task ID to process
+   */
+  async processRequirementWithModelComparison(taskId: string): Promise<void> {
+    try {
+      // Fetch task details
+      const task = await this.prismaRepository.requirementTask.findUnique({
+        where: { id: taskId },
+      });
+
+      if (!task) {
+        throw new Error(`Task with ID ${taskId} not found`);
+      }
+
+      // Update status: starting multi-model analysis
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.1,
+        details: { message: 'Starting multi-model requirement analysis' },
+      });
+
+      // Check Ollama availability
+      const ollamaStatus =
+        await this.llmIntegrationService.checkOllamaAvailability();
+
+      if (!ollamaStatus.available) {
+        throw new Error('Ollama is not available for multi-model comparison');
+      }
+
+      // Analyze requirement (DeepSeek Chat)
+      const requirementAnalysis =
+        await this.llmIntegrationService.analyzeRequirementWithOllama({
+          requirementContext: task.requirement_text,
+          language: task.language,
+          systemMessage: this.systemMessage,
+        });
+
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.3,
+        details: {
+          message: 'Requirement analyzed',
+          analysis: requirementAnalysis,
+        },
+      });
+
+      // Generate code with multiple models
+      const multiModelResults =
+        await this.llmIntegrationService.generateCodeWithOllamaModel({
+          requirementAnalysis,
+          language: task.language,
+          languageContext: this.getLanguageContext(task.language),
+          systemMessage: this.systemMessage,
+        });
+
+      // Select best model output (by file count)
+      let bestModel = '';
+      let maxFileCount = 0;
+      let bestModelCode = {};
+
+      for (const [model, codeFiles] of Object.entries(multiModelResults)) {
+        const fileCount = Object.keys(codeFiles).length;
+        if (fileCount > maxFileCount) {
+          maxFileCount = fileCount;
+          bestModel = model;
+          bestModelCode = codeFiles;
+        }
+      }
+
+      if (Object.keys(bestModelCode).length === 0) {
+        // Fallback to Kevin if all models failed
+        const kevinResponse =
+          await this.llmIntegrationService.generateWithKevinModel({
+            prompt:
+              `Generate code in ${task.language.toLowerCase()} for: ${
+                requirementAnalysis.title
+              }\n` +
+              `Functionality: ${requirementAnalysis.functionality}\n` +
+              `Components: ${this.formatList(requirementAnalysis.components)}`,
+            systemMessage: this.systemMessage,
+          });
+        bestModelCode = this.extractJsonFromText(kevinResponse);
+        bestModel = 'kevin-fallback';
+      }
+
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.5,
+        details: {
+          message: 'Code generated with multiple models',
+          modelComparison: Object.keys(multiModelResults).map((model) => ({
+            model,
+            fileCount: Object.keys(multiModelResults[model]).length,
+          })),
+          selectedModel: bestModel,
+        },
+      });
+
+      // Code quality check for best model
+      const qualityResult = await this.qualityCheckService.checkCodeQuality(
+        bestModelCode as Record<string, string>,
+        requirementAnalysis,
+        task.language,
+        taskId,
+      );
+
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.in_progress,
+        progress: 0.7,
+        details: {
+          message: 'Code quality verified',
+          qualityResult: {
+            passed: qualityResult.passed,
+            codeQualityScore: qualityResult.codeQualityScore,
+            requirementCoverageScore: qualityResult.requirementCoverageScore,
+            syntaxValidityScore: qualityResult.syntaxValidityScore,
+            feedback: qualityResult.feedback,
+          },
+        },
+      });
+
+      // Commit best model code to main branch
+      const outputPath =
+        task.output_path ||
+        this.determineOutputPath(requirementAnalysis, task.language);
+
+      const commitResult = await this.gitIntegrationService.commitToGit({
+        repositoryUrl: task.repository_url,
+        branch: task.branch,
+        generatedCode: bestModelCode as Record<string, string>,
+        outputPath,
+        requirementText: task.requirement_text,
+        requirementAnalysis,
+      });
+
+      // Commit all model outputs to comparison branches
+      const comparisonBranches = [];
+
+      for (const [modelKey, codeFiles] of Object.entries(multiModelResults)) {
+        // Skip best model and empty results
+        if (modelKey !== bestModel && Object.keys(codeFiles).length > 0) {
+          try {
+            // Clean model name for branch
+            const cleanModelName = modelKey
+              .replace(/OLLAMA_|ollama-|ollama_/i, '')
+              .toLowerCase();
+            const modelBranch = `${task.branch}-${cleanModelName}`;
+
+            // Type safety for code files
+            const typedCodeFiles: Record<string, string> = {};
+
+            let isValid = true;
+            for (const [filePath, content] of Object.entries(codeFiles)) {
+              if (typeof filePath === 'string' && typeof content === 'string') {
+                typedCodeFiles[filePath] = content;
+              } else {
+                this.logger.warn(
+                  `Invalid entry in model ${modelKey} output: ${filePath} -> ${typeof content}`,
+                );
+                isValid = false;
+                break;
+              }
+            }
+
+            if (!isValid || Object.keys(typedCodeFiles).length === 0) {
+              this.logger.warn(
+                `Skipping commit for model ${modelKey} due to invalid output format`,
+              );
+              continue;
+            }
+
+            // Commit message with model info
+            const modelCommitText = `${task.requirement_text} (Generated with ${cleanModelName} model)`;
+
+            const modelCommitResult =
+              await this.gitIntegrationService.commitToGit({
+                repositoryUrl: task.repository_url,
+                branch: modelBranch,
+                generatedCode: typedCodeFiles,
+                outputPath,
+                requirementText: modelCommitText,
+                requirementAnalysis,
+              });
+
+            comparisonBranches.push({
+              model: cleanModelName,
+              branch: modelBranch,
+              commitHash: modelCommitResult.commitHash,
+              fileCount: Object.keys(typedCodeFiles).length,
+            });
+
+            this.logger.log(
+              `Successfully committed ${cleanModelName} output to branch ${modelBranch}`,
+            );
+          } catch (error) {
+            this.logger.warn(
+              `Failed to commit ${modelKey} output: ${error.message}`,
+            );
+          }
+        }
+      }
+
+      // Final status update
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.completed,
+        progress: 1.0,
+        details: {
+          message:
+            'Code generated with multiple models, quality verified, and committed to repository',
+          commitHash: commitResult.commitHash,
+          filesChanged: commitResult.filesChanged,
+          generatedWith: bestModel,
+          comparisonBranches,
+          qualityPassed: qualityResult.passed,
+          qualityScores: {
+            overall:
+              qualityResult.codeQualityScore * 0.5 +
+              qualityResult.requirementCoverageScore * 0.3 +
+              qualityResult.syntaxValidityScore * 0.2,
+            codeQuality: qualityResult.codeQualityScore,
+            requirementCoverage: qualityResult.requirementCoverageScore,
+            syntaxValidity: qualityResult.syntaxValidityScore,
+          },
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Error processing task with model comparison ${taskId}: ${error.message}`,
+        error.stack,
+      );
+      await this.requirementTaskService.updateTaskStatus({
+        taskId,
+        status: RequirementStatus.failed,
+        progress: 0,
+        details: { error: error.message },
+      });
+    }
+  }
+
+  /**
+   * Analyze and understand a requirement using LLM.
+   * 
    * @param requirementText The raw requirement text
    * @param language Target programming language
    * @private
    */
-  private async analyzeRequirement(requirementText: string, language: CodeLanguage): Promise<Record<string, any>> {
+  private async analyzeRequirement(
+    requirementText: string,
+    language: CodeLanguage,
+  ): Promise<Record<string, any>> {
     const prompt = `
       Analyze the following software requirement and break it down into structured components.
       The code will be implemented in ${language.toLowerCase()}.
@@ -162,32 +818,27 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
       6. Suggested file structure for implementation
     `;
 
-    const result = await this.callLlmApi({
+    const result = await this.llmIntegrationService.callLLmApi({
       prompt,
       systemMessage: this.systemMessage,
-      options: {}
+      options: {},
     });
 
     // Parse the LLM response into a structured format
-    const analysis = {
-      title: this.extractTitle(result),
-      functionality: this.extractSection(result, 'main functionality'),
-      components: this.extractComponents(result),
-      inputsOutputs: this.extractSection(result, 'inputs and outputs'),
-      dependencies: this.extractSection(result, 'dependencies or constraints'),
-      fileStructure: this.extractFileStructure(result)
-    };
-
-    return analysis;
+    return this.parseAnalysisResult(result);
   }
 
   /**
-   * Generate code based on the analyzed requirement
+   * Generate code based on the analyzed requirement.
+   * 
    * @param requirementAnalysis Structured analysis of the requirement
    * @param language Target programming language
    * @private
    */
-  private async generateCode(requirementAnalysis: Record<string, any>, language: CodeLanguage): Promise<Record<string, string>> {
+  private async generateCode(
+    requirementAnalysis: Record<string, any>,
+    language: CodeLanguage,
+  ): Promise<Record<string, string>> {
     // Prepare language-specific context
     const languageContext = this.getLanguageContext(language);
 
@@ -217,10 +868,10 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
       Format the response as a JSON object where keys are file paths and values are the file content.
     `;
 
-    const result = await this.callLlmApi({
+    const result = await this.llmIntegrationService.callLLmApi({
       prompt,
       systemMessage: this.systemMessage,
-      options: {}
+      options: {},
     });
 
     // Extract the code from the LLM response
@@ -234,420 +885,15 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
   }
 
   /**
-   * Commit generated code to a Git repository
-   * @param repositoryUrl URL of the Git repository
-   * @param branch Branch to commit to
-   * @param generatedCode Generated code files
-   * @param outputPath Base path for output files
-   * @param requirementText Original requirement text
-   * @param requirementAnalysis Requirement analysis
-   * @private
-   */
-  private async commitToGit(
-    repositoryUrl: string,
-    branch: string,
-    generatedCode: Record<string, string>,
-    outputPath: string,
-    requirementText: string,
-    requirementAnalysis: Record<string, any>
-  ): Promise<{ commitHash: string; filesChanged: string[] }> {
-    // Create a temporary directory for the repository
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-agent-'));
-    
-    try {
-      // Initialize Git
-      const git = simpleGit();
-      
-      // Set up Git configuration
-      await git.addConfig('user.name', process.env.GIT_USERNAME || 'mcp-agent');
-      await git.addConfig('user.email', process.env.GIT_EMAIL || 'mcp-agent@example.com');
-      
-      // Configure SSH if needed (for private repositories)
-      const sshKeyPath = process.env.GIT_SSH_KEY_PATH;
-      if (sshKeyPath) {
-        git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no`);
-      }
-      
-      // Clone the repository
-      this.logger.log(`Cloning repository ${repositoryUrl} to ${tempDir}`);
-      await git.clone(repositoryUrl, tempDir);
-      
-      // Switch to working directory
-      const workingGit = simpleGit(tempDir);
-      
-      // Check out the specified branch
-      const branches = await workingGit.branch();
-      
-      if (branches.all.includes(branch) || branches.all.includes(`remotes/origin/${branch}`)) {
-        await workingGit.checkout(branch);
-      } else {
-        // Create a new branch if it doesn't exist
-        await workingGit.checkoutLocalBranch(branch);
-      }
-      
-      // Write files to the repository
-      const filesChanged: string[] = [];
-      
-      for (const [filePath, content] of Object.entries(generatedCode)) {
-        const fullPath = path.join(tempDir, outputPath, filePath);
-        
-        // Ensure directory exists
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-        
-        // Write file content
-        fs.writeFileSync(fullPath, content);
-        
-        // Add to tracked files
-        filesChanged.push(path.join(outputPath, filePath));
-      }
-      
-      // Stage all changes
-      await workingGit.add(filesChanged);
-      
-      // Create commit message
-      const commitMessage = `feat: implement ${requirementAnalysis.title || 'new requirement'}\n\n${requirementText.substring(0, 200)}${requirementText.length > 200 ? '...' : ''}`;
-      
-      // Commit changes
-      const commitResult = await workingGit.commit(commitMessage);
-      
-      // Push changes to remote
-      await workingGit.push('origin', branch);
-      
-      this.logger.log(`Successfully committed and pushed changes to ${repositoryUrl}:${branch}`);
-      
-      return {
-        commitHash: commitResult.commit,
-        filesChanged,
-      };
-    } catch (error) {
-      this.logger.error(`Error committing to Git: ${error.message}`, error.stack);
-      throw new Error(`Failed to commit to Git repository: ${error.message}`);
-    } finally {
-      // Clean up temporary directory
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        this.logger.debug(`Cleaned up temporary directory: ${tempDir}`);
-      } catch (cleanupError) {
-        this.logger.warn(`Failed to clean up temporary directory: ${cleanupError.message}`);
-      }
-    }
-  }
-
-  /**
-   * Call the LLM API with a prompt
-   * @param prompt The prompt to send to the LLM
-   * @private
-   */
-  private async callLlmApi(dto: RequestLLMDto): Promise<string> {
-    try {
-      dto.options.temperature = dto.options?.temperature ?? 0.2;
-      
-      if (dto.options?.useFallback !== false) {
-        // 使用 fallback 機制（會自動嘗試 Ollama 原生 API）
-        const result = await this.llmService.callLLMApiWithFallback(dto);
-        
-        this.logger.log(`LLM call successful using provider: ${result.provider}`);
-        return result.content;
-      } else {
-        // 使用指定提供商（現在支援 Ollama 原生 API）
-        return await this.llmService.callLLMApi(dto);
-      }
-    } catch (error) {
-      this.logger.error(`Error calling LLM API: ${error.message}`);
-      throw new Error(`Failed to call LLM API: ${error.message}`);
-    }
-  }
-
-  private async generateCodeWithOllama(requirementAnalysis: Record<string, any>, language: CodeLanguage): Promise<Record<string, string>> {
-    const languageContext = this.getLanguageContext(language);
-
-    const prompt = `
-      Generate code in ${language.toLowerCase()} based on the following analyzed requirement:
-      
-      Title: ${requirementAnalysis.title}
-      Functionality: ${requirementAnalysis.functionality}
-      Components needed: ${this.formatList(requirementAnalysis.components)}
-      
-      ${languageContext}
-      
-      Provide complete code with proper documentation.
-      Format the response as a JSON object where keys are file paths and values are the file content.
-    `;
-
-    // 明確指定使用 Ollama 的 DeepSeek Coder（原生 API）
-    const result = await this.callLlmApi({
-      prompt,
-      systemMessage: this.systemMessage,
-      options: {
-        provider: LLMProvider.OLLAMA,
-        temperature: 0.2,
-        useFallback: false
-      }
-    });
-
-    try {
-      return JSON.parse(result);
-    } catch (error) {
-      return this.extractJsonFromText(result);
-    }
-  }
-
-  private async analyzeRequirementWithOllama(requirementText: string, language: CodeLanguage): Promise<Record<string, any>> {
-    const prompt = `
-      Analyze the following software requirement and break it down into structured components.
-      The code will be implemented in ${language.toLowerCase()}.
-      
-      Requirement: ${requirementText}
-      
-      Please provide:
-      1. A clear title for this requirement
-      2. The main functionality being requested
-      3. Key components or modules needed
-      4. Expected inputs and outputs
-      5. Any dependencies or constraints mentioned
-      6. Suggested file structure for implementation
-    `;
-
-    // 使用 Ollama 的 DeepSeek Chat 進行需求分析（原生 API）
-    const result = await this.callLlmApi({
-      prompt,
-      systemMessage: this.systemMessage,
-      options: {
-        provider: LLMProvider.OLLAMA_DEEPSEEK_CHAT,
-        temperature: 0.1,
-        useFallback: false
-      }
-    });
-
-    return this.parseAnalysisResult(result);
-  }
-
-  // 新增：使用您截圖中的 kevin 模型
-  private async generateWithKevinModel(prompt: string): Promise<string> {
-    return this.callLlmApi(({
-      prompt,
-      systemMessage: this.systemMessage,
-      options: {
-        provider: LLMProvider.OLLAMA_KEVIN,
-        temperature: 0.2,
-        useFallback: false
-      }
-    }));
-  }
-
-  // 檢查 Ollama 可用性
-  async checkOllamaAvailability(): Promise<{ available: boolean; models: string[] }> {
-    const availableProviders = this.llmService.getAvailableProviders();
-    const ollamaProviders = Object.keys(availableProviders).filter(name => name.startsWith('ollama-'));
-    
-    return {
-      available: ollamaProviders.length > 0,
-      models: ollamaProviders.map(name => name.replace('ollama-', ''))
-    };
-  }
-
-  // 使用多個 Ollama 模型進行對比
-  async generateCodeWithMultipleOllamaModels(
-    requirementAnalysis: Record<string, any>, 
-    language: CodeLanguage
-  ): Promise<Record<string, Record<string, string>>> {
-    // 修正：確保這些模型在您的環境中可用
-    const ollamaModels = [LLMProvider.OLLAMA_KEVIN, LLMProvider.OLLAMA_DEEPSEEK_CODER, LLMProvider.OLLAMA_LLAMA3_1, LLMProvider.OLLAMA_QWEN2_5];
-    const results: Record<string, Record<string, string>> = {};
-
-    const prompt = `Generate ${language} code for: ${requirementAnalysis.title}`;
-
-    for (const model of ollamaModels) {
-      try {
-        this.logger.debug(`Trying to generate code with ${model}`);
-        const result = await this.callLlmApi({
-          prompt,
-          systemMessage: this.systemMessage,
-          options: {
-            provider: model,
-            useFallback: false
-          }
-        });
-        results[model] = this.extractJsonFromText(result);
-        this.logger.log(`Successfully generated code with ${model}`);
-      } catch (error) {
-        this.logger.warn(`${model} failed: ${error.message}`);
-        results[model] = {};
-      }
-    }
-
-    return results;
-  }
-
-  // 新增：測試特定模型是否可用
-  async testSpecificOllamaModel(modelName: string): Promise<boolean> {
-    try {
-      const result = await this.callLlmApi({
-        prompt: 'Hello, please respond with "OK" to confirm you are working.',
-        systemMessage: this.systemMessage,
-        options: {
-          provider: `ollama-${modelName}` as LLMProvider,
-          useFallback: false
-        }
-      });
-      return result.toLowerCase().includes('ok');
-    } catch (error) {
-      this.logger.warn(`Model ollama-${modelName} is not available: ${error.message}`);
-      return false;
-    }
-  }
-
-  // 新增：解析分析結果的輔助方法
-  private parseAnalysisResult(result: string): Record<string, any> {
-    // 這裡實現解析 LLM 回應的邏輯
-    return {
-      title: this.extractTitle(result),
-      functionality: this.extractSection(result, 'main functionality'),
-      components: this.extractComponents(result),
-      inputsOutputs: this.extractSection(result, 'inputs and outputs'),
-      dependencies: this.extractSection(result, 'dependencies or constraints'),
-      fileStructure: this.extractFileStructure(result)
-    };
-  }
-
-  /**
-   * Extract a title from LLM response
-   * @param text LLM response text
-   * @private
-   */
-  private extractTitle(text: string): string {
-    const titleRegex = /(?:title|name):\s*(.*?)(?:\n|$)/i;
-    const match = text.match(titleRegex);
-    return match ? match[1].trim() : 'Untitled Requirement';
-  }
-
-  /**
-   * Extract a specific section from LLM response
-   * @param text LLM response text
-   * @param section Section name to extract
-   * @private
-   */
-  private extractSection(text: string, section: string): string {
-    const sectionRegex = new RegExp(`(?:${section}|\\d+\\.\\s*(?:[\\w\\s]+${section}[\\w\\s]+)):?\\s*([\\s\\S]*?)(?:\\n\\s*\\d+\\.|\\n\\s*(?:[A-Z]|\\w+:)|$)`, 'i');
-    const match = text.match(sectionRegex);
-    return match ? match[1].trim() : '';
-  }
-
-  /**
-   * Extract components from LLM response
-   * @param text LLM response text
-   * @private
-   */
-  private extractComponents(text: string): string[] {
-    // Try to find components section
-    const componentsSection = this.extractSection(text, 'components|modules');
-    
-    if (!componentsSection) {
-      return [];
-    }
-    
-    // Split by bullet points or numbered items
-    const componentLines = componentsSection.split(/\n\s*[-*•]|\n\s*\d+\.\s+/).filter(Boolean);
-    
-    return componentLines.map(line => line.trim());
-  }
-
-  /**
-   * Extract file structure from LLM response
-   * @param text LLM response text
-   * @private
-   */
-  private extractFileStructure(text: string): string[] {
-    const fileStructureSection = this.extractSection(text, 'file structure');
-    
-    if (!fileStructureSection) {
-      return [];
-    }
-    
-    // Split by bullet points, numbered items, or file paths
-    const fileLines = fileStructureSection.split(/\n\s*[-*•]|\n\s*\d+\.\s+|\n\s*(?:\/|\\)/).filter(Boolean);
-    
-    return fileLines.map(line => {
-      // Clean up file paths
-      const cleaned = line.trim().replace(/^(?:\/|\\|-\s*|•\s*|\d+\.\s*)/, '');
-      return cleaned;
-    });
-  }
-
-  /**
-   * Format a list of items for prompting
-   * @param items List of items
-   * @private
-   */
-  private formatList(items: string[]): string {
-    if (!items || items.length === 0) {
-      return 'None specified';
-    }
-    
-    return items.map(item => `- ${item}`).join('\n');
-  }
-
-  /**
-   * Extract JSON from text response when direct parsing fails
-   * @param text LLM response text
-   * @private
-   */
-  private extractJsonFromText(text: string): Record<string, string> {
-    // Try to find JSON block in the text
-    const jsonBlockRegex = /```(?:json)?\s*({[\s\S]*?})\s*```|({[\s\S]*?})/;
-    const match = text.match(jsonBlockRegex);
-    
-    if (match && (match[1] || match[2])) {
-      try {
-        return JSON.parse(match[1] || match[2]);
-      } catch (error) {
-        this.logger.error('Failed to parse JSON from extracted block', error);
-      }
-    }
-    
-    // Fallback: try to construct JSON from file sections
-    const fileBlockRegex = /```(?:\w+)?\s*\/([^/]+\/[^`]+)```/g;
-    const fileBlocks = [...text.matchAll(fileBlockRegex)];
-    
-    const result: Record<string, string> = {};
-    
-    for (const match of fileBlocks) {
-      const parts = match[1].split('\n');
-      if (parts.length > 0) {
-        const filePath = parts[0].trim();
-        const content = parts.slice(1).join('\n');
-        result[filePath] = content;
-      }
-    }
-    
-    if (Object.keys(result).length > 0) {
-      return result;
-    }
-    
-    // Last resort: extract filename/path headers and code blocks
-    const headers = text.match(/#{1,3}\s+([^#\n]+\.[\w]+)/g) || [];
-    const codeBlocks = text.match(/```(?:\w+)?\s*([\s\S]*?)```/g) || [];
-    
-    if (headers.length > 0 && headers.length === codeBlocks.length) {
-      for (let i = 0; i < headers.length; i++) {
-        const filePath = headers[i].replace(/^#{1,3}\s+/, '').trim();
-        const content = codeBlocks[i].replace(/```(?:\w+)?\s*([\s\S]*?)```/, '$1').trim();
-        result[filePath] = content;
-      }
-    }
-    
-    return result;
-  }
-
-  /**
-   * Get language-specific context for code generation
+   * Get language-specific context for code generation.
+   * 
    * @param language Target programming language
    * @private
    */
   private getLanguageContext(language: CodeLanguage): string {
     // Provide specific guidance based on language
     const contexts = {
-      'typescript': `
+      typescript: `
         Use TypeScript best practices:
         - Use interfaces for data structures
         - Apply proper typing throughout the code
@@ -657,21 +903,21 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
         - Implement error handling with try/catch
         - Add JSDoc comments for all functions and classes
       `,
-      'javascript': `
+      javascript: `
         Use JavaScript best practices:
         - Use ES6+ features (arrow functions, destructuring, etc.)
         - Apply proper error handling with try/catch
         - Add JSDoc comments for all functions and classes
         - Implement async/await patterns for asynchronous code
       `,
-      'python': `
+      python: `
         Use Python best practices:
         - Follow PEP 8 style guidelines
         - Use type hints (Python 3.5+)
         - Add docstrings for all functions and classes
         - Implement proper error handling with try/except
       `,
-      'java': `
+      java: `
         Use Java best practices:
         - Follow standard Java conventions
         - Use appropriate design patterns
@@ -680,41 +926,50 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
       `,
       // Add other languages as needed
     };
-    
+
     const languageKey = language.toString().toLowerCase();
-    return contexts[languageKey] || 'Follow standard coding conventions and best practices for this language.';
+    return (
+      contexts[languageKey] ||
+      'Follow standard coding conventions and best practices for this language.'
+    );
   }
-  
+
   /**
-   * Determine the appropriate output path based on requirement analysis
+   * Determine the appropriate output path based on requirement analysis.
+   * 
    * @param analysis Requirement analysis
    * @param language Target programming language
    * @private
    */
-  private determineOutputPath(analysis: Record<string, any>, language: CodeLanguage): string {
+  private determineOutputPath(
+    analysis: Record<string, any>,
+    language: CodeLanguage,
+  ): string {
     // Default paths based on language
     const defaultPaths = {
-      'typescript': 'src',
-      'javascript': 'src',
-      'python': 'src',
-      'java': 'src/main/java',
-      'go': 'pkg',
-      'rust': 'src',
-      'csharp': 'src',
-      'ruby': 'lib',
-      'php': 'src',
+      typescript: 'src',
+      javascript: 'src',
+      python: 'src',
+      java: 'src/main/java',
+      go: 'pkg',
+      rust: 'src',
+      csharp: 'src',
+      ruby: 'lib',
+      php: 'src',
     };
 
     // Try to infer a meaningful path from the analysis
     if (analysis.fileStructure && analysis.fileStructure.length > 0) {
       // Look for common root directory in file structure
-      const paths = analysis.fileStructure.map(file => {
-        if (typeof file === 'string') {
-          const parts = file.split('/');
-          return parts[0];
-        }
-        return null;
-      }).filter(Boolean);
+      const paths = analysis.fileStructure
+        .map((file) => {
+          if (typeof file === 'string') {
+            const parts = file.split('/');
+            return parts[0];
+          }
+          return null;
+        })
+        .filter(Boolean);
 
       if (paths.length > 0) {
         // Use most common directory
@@ -739,5 +994,166 @@ export class CodeGenerationServiceImpl implements OnModuleInit {
     // Fallback to default path for the language
     const languageKey = language.toString().toLowerCase();
     return defaultPaths[languageKey] || 'src';
+  }
+
+  /**
+   * Parse analysis result from LLM response.
+   * 
+   * @param result LLM response text
+   * @private
+   */
+  private parseAnalysisResult(result: string): Record<string, any> {
+    return {
+      title: this.extractTitle(result),
+      functionality: this.extractSection(result, 'main functionality'),
+      components: this.extractComponents(result),
+      inputsOutputs: this.extractSection(result, 'inputs and outputs'),
+      dependencies: this.extractSection(result, 'dependencies or constraints'),
+      fileStructure: this.extractFileStructure(result),
+    };
+  }
+
+  /**
+   * Extract a title from LLM response.
+   * 
+   * @param text LLM response text
+   * @private
+   */
+  private extractTitle(text: string): string {
+    const titleRegex = /(?:title|name):\s*(.*?)(?:\n|$)/i;
+    const match = text.match(titleRegex);
+    return match ? match[1].trim() : 'Untitled Requirement';
+  }
+
+  /**
+   * Extract a specific section from LLM response.
+   * 
+   * @param text LLM response text
+   * @param section Section name to extract
+   * @private
+   */
+  private extractSection(text: string, section: string): string {
+    const sectionRegex = new RegExp(
+      `(?:${section}|\\d+\\.\\s*(?:[\\w\\s]+${section}[\\w\\s]+)):?\\s*([\\s\\S]*?)(?:\\n\\s*\\d+\\.|\\n\\s*(?:[A-Z]|\\w+:)|$)`,
+      'i',
+    );
+    const match = text.match(sectionRegex);
+    return match ? match[1].trim() : '';
+  }
+
+  /**
+   * Extract components from LLM response.
+   * 
+   * @param text LLM response text
+   * @private
+   */
+  private extractComponents(text: string): string[] {
+    // Try to find components section
+    const componentsSection = this.extractSection(text, 'components|modules');
+
+    if (!componentsSection) {
+      return [];
+    }
+
+    // Split by bullet points or numbered items
+    const componentLines = componentsSection
+      .split(/\n\s*[-*•]|\n\s*\d+\.\s+/)
+      .filter(Boolean);
+
+    return componentLines.map((line) => line.trim());
+  }
+
+  /**
+   * Extract file structure from LLM response.
+   * 
+   * @param text LLM response text
+   * @private
+   */
+  private extractFileStructure(text: string): string[] {
+    const fileStructureSection = this.extractSection(text, 'file structure');
+
+    if (!fileStructureSection) {
+      return [];
+    }
+
+    // Split by bullet points, numbered items, or file paths
+    const fileLines = fileStructureSection
+      .split(/\n\s*[-*•]|\n\s*\d+\.\s+|\n\s*(?:\/|\\)/)
+      .filter(Boolean);
+
+    return fileLines.map((line) => {
+      // Clean up file paths
+      const cleaned = line.trim().replace(/^(?:\/|\\|-\s*|•\s*|\d+\.\s*)/, '');
+      return cleaned;
+    });
+  }
+
+  /**
+   * Format a list of items for prompting.
+   * 
+   * @param items List of items
+   * @private
+   */
+  private formatList(items: string[]): string {
+    if (!items || items.length === 0) {
+      return 'None specified';
+    }
+
+    return items.map((item) => `- ${item}`).join('\n');
+  }
+
+  /**
+   * Extract JSON from text response when direct parsing fails.
+   * 
+   * @param text LLM response text
+   * @private
+   */
+  private extractJsonFromText(text: string): Record<string, string> {
+    // Try to find JSON block in the text
+    const jsonBlockRegex = /```(?:json)?\s*({[\s\S]*?})\s*```|({[\s\S]*?})/;
+    const match = text.match(jsonBlockRegex);
+
+    if (match && (match[1] || match[2])) {
+      try {
+        return JSON.parse(match[1] || match[2]);
+      } catch (error) {
+        this.logger.error('Failed to parse JSON from extracted block', error);
+      }
+    }
+
+    // Fallback: try to construct JSON from file sections
+    const fileBlockRegex = /```(?:\w+)?\s*\/([^/]+\/[^`]+)```/g;
+    const fileBlocks = [...text.matchAll(fileBlockRegex)];
+
+    const result: Record<string, string> = {};
+
+    for (const match of fileBlocks) {
+      const parts = match[1].split('\n');
+      if (parts.length > 0) {
+        const filePath = parts[0].trim();
+        const content = parts.slice(1).join('\n');
+        result[filePath] = content;
+      }
+    }
+
+    if (Object.keys(result).length > 0) {
+      return result;
+    }
+
+    // Last resort: extract filename/path headers and code blocks
+    const headers = text.match(/#{1,3}\s+([^#\n]+\.[\w]+)/g) || [];
+    const codeBlocks = text.match(/```(?:\w+)?\s*([\s\S]*?)```/g) || [];
+
+    if (headers.length > 0 && headers.length === codeBlocks.length) {
+      for (let i = 0; i < headers.length; i++) {
+        const filePath = headers[i].replace(/^#{1,3}\s+/, '').trim();
+        const content = codeBlocks[i]
+          .replace(/```(?:\w+)?\s*([\s\S]*?)```/, '$1')
+          .trim();
+        result[filePath] = content;
+      }
+    }
+
+    return result;
   }
 }
